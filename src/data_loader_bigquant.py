@@ -38,7 +38,7 @@ def load_etf_data_bigquant(
         AND date <= '{end_date}'
     ORDER BY date, instrument
     """
-    df = dai.query(sql).df()
+    df = dai.query(sql, filters={"date": [start_date, end_date]}).df()
     if df.empty:
         raise ValueError("Loaded ETF data is empty. Please check table name, date range, and permissions.")
     df["date"] = pd.to_datetime(df["date"])
@@ -78,7 +78,7 @@ def load_condition_research_data_bigquant(
         AND date <= '{end_date}'
     ORDER BY date, instrument
     """
-    df = dai.query(sql).df()
+    df = dai.query(sql, filters={"date": [start_date, end_date]}).df()
     if df.empty:
         raise ValueError("Loaded ETF condition-study data is empty. Please check table, date range, and permissions.")
     df["date"] = pd.to_datetime(df["date"])
