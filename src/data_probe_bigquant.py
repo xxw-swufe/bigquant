@@ -42,7 +42,6 @@ def run_data_probe(
         "cn_fund_nav",
         "cn_fund_static_data",
         "cn_stock_index_bar1d",
-        "cn_index_bar1d",
     ]
     results = {}
     lines = ["# BigQuant Table Probe", ""]
