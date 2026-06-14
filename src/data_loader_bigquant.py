@@ -50,7 +50,7 @@ def load_condition_research_data_bigquant(
     end_date: str = "2024-12-31",
     table_name: str = "cn_fund_bar1d",
     volume_col: str = "volume",
-    turnover_col: str = "turnover",
+    turnover_col: str = "turn",
 ) -> pd.DataFrame:
     """Load the minimal ETF fields for the first condition-study MVP.
 
