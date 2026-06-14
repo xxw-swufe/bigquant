@@ -15,7 +15,6 @@ class ResearchConfig:
     cost_bps: float = 10.0
     factor_cols: list[str] = field(
         default_factory=lambda: [
-            "relative_strength_20d",
             "momentum_20d",
             "amount_ratio_20d",
             "trend_strength",
