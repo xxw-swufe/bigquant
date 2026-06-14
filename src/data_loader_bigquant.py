@@ -29,7 +29,7 @@ def load_etf_data_bigquant(
         close / m_lag(close, 20) - 1 AS momentum_20d,
         amount / m_avg(amount, 20) AS amount_ratio_20d,
         m_avg(close, 5) / m_avg(close, 20) - 1 AS trend_strength,
-        m_std(close / m_lag(close, 1) - 1, 20) AS volatility_20d,
+        m_stddev(close / m_lag(close, 1) - 1, 20) AS volatility_20d,
         m_lead(close, 5) / close - 1 AS future_return_5d,
         m_lead(close, 20) / close - 1 AS future_return_20d
     FROM {table_name}
