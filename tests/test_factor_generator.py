@@ -4,6 +4,7 @@ from src.factor_resolver import resolve_factor_intent
 from src.factor_availability import build_factor_tool_payload, select_factor_plan
 from src.scoring import compute_metadata_composite_score, normalize_factor_frame, score_series
 from src.agent_tools import list_agent_tools, call_agent_tool
+from src.chat_agent import decide_tool, summarize_tool_result
 
 
 def test_generated_factors_do_not_use_future_data():
@@ -95,3 +96,21 @@ def test_search_and_range_better_scoring():
     scored = score_series(pd.Series([1, 3, 4, 5, 7]), score_shape="range_better", optimal_range=(3, 5))
     assert scored.iloc[1] >= scored.iloc[0]
     assert scored.iloc[2] >= scored.iloc[0]
+
+
+def test_chat_agent_rule_based_routing_and_summary():
+    condition_decision = decide_tool("量比大于1，今日上涨，明天上涨概率大吗？", use_llm=False)
+    factor_decision = decide_tool("成交额放大趋势走强，做因子回测", use_llm=False)
+    assert condition_decision["tool_name"] == "run_condition_research_pipeline"
+    assert factor_decision["tool_name"] == "run_factor_research_pipeline"
+
+    reply = summarize_tool_result(
+        "测试",
+        "run_condition_research_pipeline",
+        {
+            "result": {"event_count": 10, "total_count": 100, "probability_lift": 0.02},
+            "diagnosis": {"research_decision": "谨慎继续"},
+        },
+        use_llm=False,
+    )
+    assert "条件研究完成" in reply

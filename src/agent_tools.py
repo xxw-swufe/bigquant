@@ -9,7 +9,7 @@ from src.condition_analysis import run_conditional_probability_test
 from src.condition_parser import parse_condition_research
 from src.condition_report import generate_condition_report
 from src.data_probe_bigquant import run_data_probe
-from src.data_loader_bigquant import load_etf_data_bigquant
+from src.data_loader_bigquant import load_condition_research_data_bigquant, load_etf_data_bigquant
 from src.diagnosis import diagnose_strategy
 from src.factor_analysis import run_factor_analysis
 from src.factor_availability import build_factor_tool_payload, get_available_factors
@@ -146,14 +146,13 @@ def tool_run_condition_research_pipeline(
     """Run the full condition-study pipeline as a single tool call."""
     hypothesis = parse_condition_research(user_idea)
     probe_results = run_data_probe()
-    df = load_etf_data_bigquant(
+    df = load_condition_research_data_bigquant(
         start_date=start_date,
         end_date=end_date,
         table_name=table_name,
         volume_col=volume_col,
+        turnover_col=turnover_col,
     )
-    if turnover_col in df.columns and "turnover" not in df.columns:
-        df["turnover"] = df[turnover_col]
     result = run_conditional_probability_test(
         df=df,
         conditions=hypothesis["conditions"],
