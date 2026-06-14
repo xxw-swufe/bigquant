@@ -16,7 +16,7 @@ from src.factor_availability import build_factor_tool_payload, get_available_fac
 from src.factor_generator import generate_factor_candidates
 from src.factor_resolver import resolve_factor_intent
 from src.report import generate_report
-from src.scoring import build_weight_schemes, compute_composite_score, normalize_factors
+from src.scoring import build_weight_schemes, compute_composite_score, compute_metadata_composite_score, normalize_factors
 from src.backtest import run_top_pct_backtest
 from src.condition_analysis import diagnose_condition_result
 
