@@ -1,5 +1,7 @@
 """Factor normalization and composite scoring."""
 
+from typing import Optional, Tuple
+
 import numpy as np
 import pandas as pd
 
@@ -9,19 +11,114 @@ def normalize_factors(
     factor_directions: dict[str, str],
     method: str = "rank",
 ) -> pd.DataFrame:
-    """Normalize factors cross-sectionally by date."""
+    """Normalize factors cross-sectionally by date.
+
+    This is the legacy, column-name based normalization entry point. It keeps
+    compatibility with the existing notebook flow.
+    """
     data = df.copy()
     for factor_col, direction in factor_directions.items():
         score_col = f"{factor_col}_score"
         if method != "rank":
             raise ValueError(f"Unsupported normalization method: {method}")
-        data[score_col] = data.groupby("date")[factor_col].rank(pct=True)
+        data[score_col] = data.groupby("date")[factor_col].rank(pct=True, method="average")
         if direction == "lower_better":
             data[score_col] = 1 - data[score_col]
+        data[score_col] = data[score_col].clip(0.0, 1.0)
     return data
 
 
-def build_weight_schemes(factor_cols: list[str], factor_result: dict | None = None) -> dict[str, dict[str, float]]:
+def score_series(
+    series: pd.Series,
+    *,
+    direction: str = "higher_better",
+    score_shape: str = "linear",
+    optimal_range: Optional[Tuple[float, float]] = None,
+) -> pd.Series:
+    """Convert a raw factor series to a 0-1 style score.
+
+    Supported shapes:
+    - linear: higher/lower is better
+    - range_better: best within an interval
+    - u_shape: both low and high are better, mid is worse
+    - inverted_u: mid is better, extremes are worse
+    """
+    values = pd.to_numeric(series, errors="coerce")
+    if values.dropna().empty:
+        return pd.Series(np.nan, index=series.index)
+
+    if score_shape == "linear":
+        ranked = values.rank(pct=True, method="average")
+        if direction == "lower_better":
+            ranked = 1 - ranked
+        return ranked.clip(0.0, 1.0)
+
+    if score_shape == "range_better":
+        if optimal_range is None:
+            raise ValueError("range_better scoring requires optimal_range.")
+        low, high = optimal_range
+        midpoint = (low + high) / 2
+        span = max(high - low, 1e-9)
+        score = pd.Series(1.0, index=values.index, dtype=float)
+        score = score.where((values >= low) & (values <= high), 0.0)
+        edge_distance = (values - midpoint).abs() / (span / 2)
+        score = score.where(score == 0.0, 1 - 0.25 * edge_distance)
+        return score.clip(0.0, 1.0)
+
+    if score_shape == "u_shape":
+        center = values.median()
+        spread = max((values.quantile(0.75) - values.quantile(0.25)) / 2, 1e-9)
+        distance = (values - center).abs() / spread
+        score = distance
+        if direction == "lower_better":
+            score = 1 - score.rank(pct=True, method="average")
+        else:
+            score = score.rank(pct=True, method="average")
+        return score.clip(0.0, 1.0)
+
+    if score_shape == "inverted_u":
+        center = values.median()
+        spread = max((values.quantile(0.75) - values.quantile(0.25)) / 2, 1e-9)
+        distance = (values - center).abs() / spread
+        score = 1 - distance
+        return score.clip(0.0, 1.0)
+
+    raise ValueError(f"Unsupported score shape: {score_shape}")
+
+
+def normalize_factor_frame(
+    df: pd.DataFrame,
+    factor_metadata: dict[str, dict],
+    method: str = "rank",
+) -> pd.DataFrame:
+    """Normalize a factor frame using metadata-driven score shapes."""
+    data = df.copy()
+    for factor_name, metadata in factor_metadata.items():
+        if factor_name not in data.columns:
+            continue
+        score_col = f"{factor_name}_score"
+        if method == "rank" and metadata.get("score_shape", "linear") == "linear":
+            data[score_col] = data.groupby("date")[factor_name].rank(pct=True, method="average")
+            if metadata.get("direction") == "lower_better":
+                data[score_col] = 1 - data[score_col]
+            data[score_col] = data[score_col].clip(0.0, 1.0)
+            continue
+
+        data[score_col] = data.groupby("date")[factor_name].transform(
+            lambda s: score_series(
+                s,
+                direction=metadata.get("direction", "higher_better"),
+                score_shape=metadata.get("score_shape", "linear"),
+                optimal_range=metadata.get("optimal_range"),
+            )
+        )
+    return data
+
+
+def build_weight_schemes(factor_cols: list[str], factor_result: Optional[dict] = None) -> dict[str, dict[str, float]]:
+    if not factor_cols:
+        raise ValueError("factor_cols must not be empty.")
+
     equal_weight = {factor: 1 / len(factor_cols) for factor in factor_cols}
     hypothesis_weight = {
         "relative_strength_20d": 0.35,
@@ -75,3 +172,13 @@ def compute_composite_score(df: pd.DataFrame, weights: dict[str, float]) -> pd.D
     data["composite_score"] = score
     return data
 
+
+def compute_metadata_composite_score(
+    df: pd.DataFrame,
+    factor_metadata: dict[str, dict],
+    weights: dict[str, float],
+    method: str = "rank",
+) -> pd.DataFrame:
+    """Normalize factors using metadata then compute the weighted score."""
+    normalized = normalize_factor_frame(df, factor_metadata, method=method)
+    return compute_composite_score(normalized, weights)
