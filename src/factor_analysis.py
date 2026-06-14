@@ -5,6 +5,8 @@ import pandas as pd
 
 
 def calc_daily_ic(df: pd.DataFrame, factor_col: str, target_col: str) -> pd.Series:
+    if factor_col not in df.columns or target_col not in df.columns:
+        return pd.Series(dtype=float)
     data = df[["date", factor_col, target_col]].dropna()
     if data.empty:
         return pd.Series(dtype=float)
@@ -21,6 +23,8 @@ def calc_quantile_return(
     target_col: str,
     n_quantiles: int = 5,
 ) -> pd.Series:
+    if factor_col not in df.columns or target_col not in df.columns:
+        return pd.Series(dtype=float)
     data = df[["date", "instrument", factor_col, target_col]].dropna().copy()
     if data.empty:
         return pd.Series(dtype=float)
@@ -61,8 +65,30 @@ def run_factor_analysis(
 ) -> dict:
     result = {}
     for factor_col in factor_cols:
+        if factor_col not in df.columns:
+            result[factor_col] = {}
+            for target_col in target_cols:
+                result[factor_col][target_col] = {
+                    "ic_summary": summarize_ic(pd.Series(dtype=float)),
+                    "ic_series": pd.Series(dtype=float),
+                    "quantile_return": pd.Series(dtype=float),
+                    "coverage": 0.0,
+                    "skipped": True,
+                    "skip_reason": f"Missing factor column: {factor_col}",
+                }
+            continue
         result[factor_col] = {}
         for target_col in target_cols:
+            if target_col not in df.columns:
+                result[factor_col][target_col] = {
+                    "ic_summary": summarize_ic(pd.Series(dtype=float)),
+                    "ic_series": pd.Series(dtype=float),
+                    "quantile_return": pd.Series(dtype=float),
+                    "coverage": float(df[factor_col].notna().mean()) if factor_col in df else 0.0,
+                    "skipped": True,
+                    "skip_reason": f"Missing target column: {target_col}",
+                }
+                continue
             ic = calc_daily_ic(df, factor_col, target_col)
             quantile_return = calc_quantile_return(df, factor_col, target_col)
             result[factor_col][target_col] = {
@@ -72,4 +98,3 @@ def run_factor_analysis(
                 "coverage": float(df[factor_col].notna().mean()) if factor_col in df else 0.0,
             }
     return result
-
