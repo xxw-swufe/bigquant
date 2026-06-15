@@ -52,10 +52,11 @@ def load_condition_research_data_bigquant(
     volume_col: str = "volume",
     turnover_col: str = "turn",
 ) -> pd.DataFrame:
-    """Load the minimal ETF fields for the first condition-study MVP.
+    """Load ETF fields used by natural-language condition studies.
 
-    The first MVP evaluates:
-    volume_ratio_5d > 1, turnover < 5, return_1d > 0, and future_return_1d > 0.
+    The condition-study agent can map phrases such as "缩量上涨",
+    "成交额放大", "未来5日" to derived fields, so this loader prepares the
+    common condition and target columns in one place.
 
     Run `run_data_probe()` first. If the BigQuant ETF table uses names such as
     `vol` or `turn`, pass them through `volume_col` and `turnover_col`.
@@ -68,10 +69,23 @@ def load_condition_research_data_bigquant(
         instrument,
         close,
         {volume_col} AS volume,
+        amount,
         {turnover_col} AS turnover,
         {volume_col} / m_avg({volume_col}, 5) AS volume_ratio_5d,
+        {volume_col} / m_avg({volume_col}, 20) AS volume_ratio_20d,
+        amount / m_avg(amount, 5) AS amount_ratio_5d,
+        amount / m_avg(amount, 20) AS amount_ratio_20d,
         close / m_lag(close, 1) - 1 AS return_1d,
-        m_lead(close, 1) / close - 1 AS future_return_1d
+        close / m_lag(close, 5) - 1 AS return_5d,
+        close / m_lag(close, 20) - 1 AS momentum_20d,
+        m_avg(close, 5) AS ma_5d,
+        m_avg(close, 20) AS ma_20d,
+        m_avg(close, 60) AS ma_60d,
+        m_avg(close, 5) / m_avg(close, 20) - 1 AS trend_strength,
+        m_lead(close, 1) / close - 1 AS future_return_1d,
+        m_lead(close, 5) / close - 1 AS future_return_5d,
+        m_lead(close, 10) / close - 1 AS future_return_10d,
+        m_lead(close, 20) / close - 1 AS future_return_20d
     FROM {table_name}
     WHERE
         date >= '{start_date}'
