@@ -5,6 +5,8 @@ from src.factor_availability import build_factor_tool_payload, select_factor_pla
 from src.scoring import compute_metadata_composite_score, normalize_factor_frame, score_series
 from src.agent_tools import list_agent_tools, call_agent_tool
 from src.chat_agent import decide_tool, summarize_tool_result
+from src.expression_knowledge_base import classify_expression, get_expression_by_phrase, search_expressions, list_expression_layers
+from src.condition_parser import parse_condition_research
 
 
 def test_generated_factors_do_not_use_future_data():
@@ -114,3 +116,73 @@ def test_chat_agent_rule_based_routing_and_summary():
         use_llm=False,
     )
     assert "条件研究完成" in reply
+
+
+def test_expression_knowledge_base_routes_common_phrases():
+    match = get_expression_by_phrase("今日上涨")
+    assert match is not None
+    assert match["canonical_name"] == "return_1d_positive"
+
+    results = search_expressions("成交额放大", limit=5)
+    assert results
+    assert any(item["canonical_name"] == "amount_ratio_expansion" for item in results)
+
+    routed = classify_expression("未来5日收益")
+    assert routed["best_match"]["canonical_name"] == "future_return_5d"
+    assert "target" in routed["route_intent"]
+
+    combo = classify_expression("今日上涨且成交额放大")
+    assert combo["best_match"] is not None
+    assert combo["matched"]
+    assert "processed_factor" in combo["matched_layers"]
+
+
+def test_expression_knowledge_base_has_full_layer_structure():
+    layers = list_expression_layers()
+    assert layers["raw_data"] >= 1
+    assert layers["native_indicator"] >= 1
+    assert layers["processed_factor"] >= 1
+    assert layers["composite_score"] >= 1
+    assert layers["intent_modifier"] >= 1
+
+
+def test_condition_parser_handles_compound_expression():
+    result = parse_condition_research("今日上涨且成交额放大")
+    assert len(result["conditions"]) >= 2
+    fields = {item["field"] for item in result["conditions"]}
+    assert "return_1d" in fields
+    assert "amount_ratio_20d" in fields
+
+
+def test_expression_kb_routes_composite_scores():
+    match = classify_expression("趋势分")
+    assert match["best_match"]["canonical_name"] == "trend_score"
+    assert "metric" in match["route_intent"] or "factor" in match["route_intent"]
+
+
+def test_expression_search_does_not_match_opposite_related_terms():
+    combo = classify_expression("今日上涨且成交额放大")
+    names = {item["canonical_name"] for item in combo["matched"]}
+    assert "return_1d_positive" in names
+    assert "amount_ratio_expansion" in names
+    assert "return_1d_negative" not in names
+    assert "volume_contraction" not in names
+
+
+def test_compound_templates_keep_correct_operators():
+    down = parse_condition_research("放量下跌")
+    down_rules = {(item["field"], item["operator"], item["value"]) for item in down["conditions"]}
+    assert ("return_1d", "<", 0.0) in down_rules
+    assert ("amount_ratio_20d", ">", 1.0) in down_rules
+
+    pullback = parse_condition_research("缩量回调")
+    pullback_rules = {(item["field"], item["operator"], item["value"]) for item in pullback["conditions"]}
+    assert ("return_1d", "<", 0.0) in pullback_rules
+    assert ("amount_ratio_20d", "<", 1.0) in pullback_rules
+
+
+def test_target_expression_stays_out_of_condition_rules():
+    result = parse_condition_research("缩量上涨，未来5日收益")
+    condition_fields = {item["field"] for item in result["conditions"]}
+    assert "future_return_5d" not in condition_fields
+    assert result["target"]["field"] == "future_return_5d"

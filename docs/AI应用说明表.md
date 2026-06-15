@@ -7,6 +7,7 @@
 | 条件研究报告 | 是 | 自动生成条件事件研究 Markdown 报告 |
 | 策略理解 | 是 | 后续扩展：将用户自然语言 ETF 研究想法转成结构化研究假设 |
 | 因子生成 | 是 | 后续扩展：根据研究假设生成候选 ETF 因子，并标记经济含义和未来数据风险 |
+| 表达知识库路由 | 是 | 将“今日上涨”“缩量上涨”“量价分”“趋势走强”等口语表达映射到标准术语、条件、因子和目标 |
 | 数据探测 | 否 | 探测 BigQuant 表字段和权限 |
 | 数据加载 | 否 | 从 BigQuant 加载 ETF 日频数据和标签 |
 | 条件事件分析 | 否 | 计算事件样本、基准样本、上涨概率、概率提升和分年份稳定性 |
@@ -22,6 +23,7 @@
 代码中以下函数使用 `# [AI-CORE]` 标注：
 
 - `parse_user_strategy`
+- `classify_expression`
 - `parse_condition_research`
 - `generate_factor_candidates`
 - `diagnose_condition_result`

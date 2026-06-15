@@ -11,6 +11,7 @@ import os
 from typing import Any, Optional
 
 from src.agent_tools import call_agent_tool
+from src.chat_state import create_chat_state, parse_user_context, update_chat_state
 from src.factor_resolver import resolve_factor_intent
 
 
@@ -57,6 +58,7 @@ def decide_tool(
     use_llm: bool = True,
     api_key: Optional[str] = None,
     model: str = DEFAULT_DEEPSEEK_MODEL,
+    parsed_context: Optional[dict[str, Any]] = None,
 ) -> dict:
     """Decide which research pipeline should handle the user request."""
     fallback = _rule_based_decision(user_input)
@@ -69,10 +71,15 @@ def decide_tool(
 1. run_condition_research_pipeline: 用户描述明确条件，并询问概率、胜率、是否上涨时使用。
 2. run_factor_research_pipeline: 用户研究因子、评分、轮动、超额收益、回测时使用。
 
+如果用户是在追问上一轮结果，请结合上下文判断：
+- 追加条件：偏向 condition_research
+- 修改目标或排序：仍可用 condition_research 或 factor_research，但不要丢失上下文
+
 请只输出 JSON，不要输出解释。JSON 格式：
 {{"tool_name": "...", "reason": "..."}}
 
 用户问题：{user_input}
+上下文摘要：{json.dumps(parsed_context or {}, ensure_ascii=False, default=str)}
 """.strip()
     try:
         content = call_deepseek(
@@ -98,14 +105,17 @@ def run_research_chat(
     use_llm: bool = True,
     api_key: Optional[str] = None,
     model: str = DEFAULT_DEEPSEEK_MODEL,
+    state: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Run a one-turn notebook chat interaction."""
-    decision = decide_tool(user_input, use_llm=use_llm, api_key=api_key, model=model)
+    state = state or create_chat_state(config)
+    parsed = parse_user_context(user_input, state.get("current_context", {}))
+    decision = decide_tool(user_input, use_llm=use_llm, api_key=api_key, model=model, parsed_context=parsed)
     tool_name = decision["tool_name"]
 
     tool_result = call_agent_tool(
         tool_name,
-        user_idea=user_input,
+        user_idea=parsed.get("user_input", user_input),
         start_date=config.start_date,
         end_date=config.end_date,
         table_name=config.fund_table,
@@ -114,26 +124,29 @@ def run_research_chat(
         cost_bps=getattr(config, "cost_bps", 10.0),
     ) if tool_name == "run_factor_research_pipeline" else call_agent_tool(
         tool_name,
-        user_idea=user_input,
+        user_idea=parsed.get("user_input", user_input),
         start_date=config.start_date,
         end_date=config.end_date,
         table_name=config.fund_table,
     )
 
     reply = summarize_tool_result(
-        user_input,
+        parsed.get("user_input", user_input),
         tool_name,
         tool_result,
         use_llm=use_llm,
         api_key=api_key,
         model=model,
     )
+    next_state = update_chat_state(state, user_input=user_input, tool_result=tool_result, assistant_reply=reply)
     return {
         "user_input": user_input,
+        "parsed_context": parsed,
         "decision": decision,
         "tool_name": tool_name,
         "tool_result": tool_result,
         "reply": reply,
+        "state": next_state,
     }
 
 
