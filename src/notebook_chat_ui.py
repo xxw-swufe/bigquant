@@ -27,18 +27,32 @@ def launch_notebook_chat(
 
     title = widgets.HTML("<h3>AutoETF Notebook Chat</h3>")
     instruction = widgets.HTML(
-        "<p>输入研究问题后点击发送。你可以继续追问，例如‘加上成交额上升’、‘换成未来10日’、‘改成放量突破’。</p>"
+        "<p>输入研究问题后点击发送。支持连续追问，例如‘加上成交额上升’、‘换成未来10日’、‘改成放量突破’。</p>"
     )
-    input_box = widgets.Textarea(
+    input_box = widgets.Text(
         value="",
-        placeholder="例如：缩量上涨后，ETF 未来5日上涨概率怎么样？",
+        placeholder="例如：缩量上涨后，ETF 未来1日上涨概率怎么样？",
         description="问题",
-        layout=widgets.Layout(width="100%", height="88px"),
+        layout=widgets.Layout(width="100%"),
     )
     send_button = widgets.Button(description="发送", button_style="primary")
     reset_button = widgets.Button(description="重置上下文", button_style="")
-    output = widgets.Output(layout=widgets.Layout(border="1px solid #ddd", padding="10px"))
-    context_output = widgets.Output(layout=widgets.Layout(border="1px solid #ddd", padding="10px"))
+    transcript_output = widgets.Output(
+        layout=widgets.Layout(
+            border="1px solid #ddd",
+            padding="10px",
+            height="360px",
+            overflow_y="auto",
+        )
+    )
+    context_output = widgets.Output(
+        layout=widgets.Layout(
+            border="1px solid #ddd",
+            padding="10px",
+            height="360px",
+            overflow_y="auto",
+        )
+    )
 
     def render_context() -> None:
         context_output.clear_output(wait=True)
@@ -60,8 +74,7 @@ def launch_notebook_chat(
         if not user_input:
             return
 
-        output.clear_output(wait=True)
-        with output:
+        with transcript_output:
             display(Markdown(f"**你：** {user_input}"))
             result = run_research_chat(
                 user_input=user_input,
@@ -83,9 +96,9 @@ def launch_notebook_chat(
         nonlocal chat_state
         chat_state = create_chat_state(config)
         input_box.value = ""
-        output.clear_output(wait=True)
+        transcript_output.clear_output(wait=True)
         render_context()
-        with output:
+        with transcript_output:
             display(Markdown("**上下文已重置。**"))
 
     send_button.on_click(handle_send)
@@ -93,14 +106,27 @@ def launch_notebook_chat(
     input_box.on_submit(lambda _: handle_send())
 
     controls = widgets.HBox([send_button, reset_button])
-    display(widgets.VBox([title, instruction, input_box, controls, output, context_output]))
+    chat_panel = widgets.VBox(
+        [
+            title,
+            instruction,
+            input_box,
+            controls,
+            widgets.HTML("<h4>聊天记录</h4>"),
+            transcript_output,
+            widgets.HTML("<h4>当前上下文</h4>"),
+            context_output,
+        ]
+    )
+    display(chat_panel)
     render_context()
 
     return {
         "state": chat_state,
         "input_box": input_box,
-        "output": output,
+        "output": transcript_output,
         "context_output": context_output,
         "send_button": send_button,
         "reset_button": reset_button,
+        "chat_panel": chat_panel,
     }
