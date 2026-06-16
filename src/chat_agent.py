@@ -187,8 +187,8 @@ def summarize_tool_result(
             api_key=api_key,
             temperature=0.2,
         )
-    except Exception as exc:
-        return f"{fallback}\n\n[LLM 总结失败，已使用模板总结] {exc}"
+    except Exception:
+        return fallback
 
 
 def _rule_based_decision(user_input: str) -> dict:

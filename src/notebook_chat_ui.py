@@ -60,6 +60,7 @@ def launch_notebook_chat(
     api_key: Optional[str] = None,
     model: str = DEFAULT_DEEPSEEK_MODEL,
     chat_runner: Optional[Callable] = None,
+    debug: bool = False,
 ):
     """Render a minimal notebook chat box with persistent state."""
     try:
@@ -150,7 +151,7 @@ def launch_notebook_chat(
                 model=model,
                 state=chat_state,
             )
-            if turn["logs"]:
+            if debug and turn["logs"]:
                 with log_output:
                     display(Markdown(f"### {user_input}"))
                     display(Markdown(f"```text\n{turn['logs']}\n```"))
@@ -159,29 +160,33 @@ def launch_notebook_chat(
                 with transcript_output:
                     display(Markdown("**发生错误：**"))
                     display(Markdown(f"```text\n{turn['error']}\n```"))
-                with log_output:
-                    display(Markdown(f"### {user_input}"))
-                    display(Markdown(f"```text\n{turn['traceback']}\n```"))
-                status_label.value = "<span style='color:#d93025'>出错，详情见工具日志</span>"
+                if debug:
+                    with log_output:
+                        display(Markdown(f"### {user_input}"))
+                        display(Markdown(f"```text\n{turn['traceback']}\n```"))
+                status_label.value = "<span style='color:#d93025'>出错</span>"
                 return
 
             result = turn["result"]
             chat_state = result["state"]
             with transcript_output:
-                display(Markdown(f"**工具：** `{result['tool_name']}`"))
-                display(Markdown(f"**路由：** {result['decision'].get('reason')}"))
+                if debug:
+                    display(Markdown(f"**工具：** `{result['tool_name']}`"))
+                    display(Markdown(f"**路由：** {result['decision'].get('reason')}"))
                 display(Markdown("**回答：**"))
                 display(Markdown(result["reply"]))
-            render_context()
+            if debug:
+                render_context()
             status_label.value = "<span style='color:#188038'>完成</span>"
         except Exception as exc:
             with transcript_output:
                 display(Markdown("**发生错误：**"))
                 display(Markdown(f"```text\n{type(exc).__name__}: {exc}\n```"))
-            with log_output:
-                display(Markdown(f"### {user_input}"))
-                display(Markdown(f"```text\n{traceback.format_exc()}\n```"))
-            status_label.value = "<span style='color:#d93025'>出错，详情见工具日志</span>"
+            if debug:
+                with log_output:
+                    display(Markdown(f"### {user_input}"))
+                    display(Markdown(f"```text\n{traceback.format_exc()}\n```"))
+            status_label.value = "<span style='color:#d93025'>出错</span>"
         finally:
             send_button.disabled = False
             reset_button.disabled = False
@@ -193,7 +198,8 @@ def launch_notebook_chat(
         transcript_output.clear_output(wait=True)
         log_output.clear_output(wait=True)
         status_label.value = ""
-        render_context()
+        if debug:
+            render_context()
         with transcript_output:
             display(Markdown("**上下文已重置。**"))
 
@@ -202,23 +208,28 @@ def launch_notebook_chat(
     input_box.on_submit(lambda _: handle_send())
 
     controls = widgets.HBox([send_button, reset_button])
-    chat_panel = widgets.VBox(
-        [
-            title,
-            instruction,
-            input_box,
-            controls,
-            status_label,
-            widgets.HTML("<h4>聊天记录</h4>"),
-            transcript_output,
-            widgets.HTML("<h4>工具日志</h4>"),
-            log_output,
-            widgets.HTML("<h4>当前上下文</h4>"),
-            context_output,
-        ]
-    )
+    panel_children = [
+        title,
+        instruction,
+        input_box,
+        controls,
+        status_label,
+        widgets.HTML("<h4>聊天记录</h4>"),
+        transcript_output,
+    ]
+    if debug:
+        panel_children.extend(
+            [
+                widgets.HTML("<h4>工具日志</h4>"),
+                log_output,
+                widgets.HTML("<h4>当前上下文</h4>"),
+                context_output,
+            ]
+        )
+    chat_panel = widgets.VBox(panel_children)
     display(chat_panel)
-    render_context()
+    if debug:
+        render_context()
 
     return {
         "state": chat_state,
