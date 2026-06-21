@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+from html import escape
 import io
-import json
 import traceback
 from typing import Callable, Optional
 
-from src.chat_state import create_chat_state, format_context_for_display, suggest_follow_up
+from src.chat_state import create_chat_state
 
 
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
@@ -53,6 +53,22 @@ def run_chat_turn_with_captured_logs(
         }
 
 
+def _append_chat_message(output, label: str, text: str, *, color: str = "#111") -> None:
+    """Append a wrapped chat message into an ipywidgets Output area."""
+    from IPython.display import HTML, display
+
+    safe_text = escape(text).replace("\n", "<br>")
+    block = (
+        "<div style='margin:0 0 12px 0; line-height:1.65; "
+        "white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word;'>"
+        f"<strong style='color:{color};'>{escape(label)}</strong>"
+        f"<span style='color:{color};'>{safe_text}</span>"
+        "</div>"
+    )
+    with output:
+        display(HTML(block))
+
+
 def launch_notebook_chat(
     config,
     *,
@@ -60,12 +76,11 @@ def launch_notebook_chat(
     api_key: Optional[str] = None,
     model: str = DEFAULT_DEEPSEEK_MODEL,
     chat_runner: Optional[Callable] = None,
-    debug: bool = False,
 ):
     """Render a minimal notebook chat box with persistent state."""
     try:
         import ipywidgets as widgets
-        from IPython.display import Markdown, display
+        from IPython.display import display
     except ImportError as exc:  # pragma: no cover - notebook-only dependency
         raise RuntimeError("ipywidgets / IPython are required for notebook chat UI.") from exc
 
@@ -93,41 +108,12 @@ def launch_notebook_chat(
         layout=widgets.Layout(
             border="1px solid #ddd",
             padding="10px",
-            height="360px",
-            overflow_y="auto",
-        )
-    )
-    log_output = widgets.Output(
-        layout=widgets.Layout(
-            border="1px solid #ddd",
-            padding="10px",
-            height="180px",
-            overflow_y="auto",
-        )
-    )
-    context_output = widgets.Output(
-        layout=widgets.Layout(
-            border="1px solid #ddd",
-            padding="10px",
-            height="360px",
-            overflow_y="auto",
+            width="100%",
+            overflow_y="visible",
+            overflow_x="hidden",
         )
     )
     status_label = widgets.HTML("")
-
-    def render_context() -> None:
-        context_output.clear_output(wait=True)
-        with context_output:
-            display(Markdown("### 当前上下文"))
-            display(Markdown(f"```json\n{format_context_for_display(chat_state)}\n```"))
-            suggestions = suggest_follow_up(chat_state)
-            if suggestions:
-                display(Markdown("### 可继续追问"))
-                display(Markdown("\n".join(f"- {item}" for item in suggestions)))
-            last_summary = chat_state.get("current_context", {}).get("last_result_summary")
-            if last_summary:
-                display(Markdown("### 上轮结果摘要"))
-                display(Markdown(f"```json\n{json.dumps(last_summary, ensure_ascii=False, indent=2, default=str)}\n```"))
 
     def handle_send(_=None):
         nonlocal chat_state
@@ -139,8 +125,7 @@ def launch_notebook_chat(
         reset_button.disabled = True
         status_label.value = "<span style='color:#555'>运行中...</span>"
         input_box.value = ""
-        with transcript_output:
-            display(Markdown(f"**你：** {user_input}"))
+        _append_chat_message(transcript_output, "你：", user_input, color="#111")
         try:
             turn = run_chat_turn_with_captured_logs(
                 runner,
@@ -151,41 +136,17 @@ def launch_notebook_chat(
                 model=model,
                 state=chat_state,
             )
-            if debug and turn["logs"]:
-                with log_output:
-                    display(Markdown(f"### {user_input}"))
-                    display(Markdown(f"```text\n{turn['logs']}\n```"))
-
             if not turn["ok"]:
-                with transcript_output:
-                    display(Markdown("**发生错误：**"))
-                    display(Markdown(f"```text\n{turn['error']}\n```"))
-                if debug:
-                    with log_output:
-                        display(Markdown(f"### {user_input}"))
-                        display(Markdown(f"```text\n{turn['traceback']}\n```"))
+                _append_chat_message(transcript_output, "发生错误：", turn["error"], color="#d93025")
                 status_label.value = "<span style='color:#d93025'>出错</span>"
                 return
 
             result = turn["result"]
             chat_state = result["state"]
-            with transcript_output:
-                if debug:
-                    display(Markdown(f"**工具：** `{result['tool_name']}`"))
-                    display(Markdown(f"**路由：** {result['decision'].get('reason')}"))
-                display(Markdown("**回答：**"))
-                display(Markdown(result["reply"]))
-            if debug:
-                render_context()
+            _append_chat_message(transcript_output, "回答：", result["reply"], color="#111")
             status_label.value = "<span style='color:#188038'>完成</span>"
         except Exception as exc:
-            with transcript_output:
-                display(Markdown("**发生错误：**"))
-                display(Markdown(f"```text\n{type(exc).__name__}: {exc}\n```"))
-            if debug:
-                with log_output:
-                    display(Markdown(f"### {user_input}"))
-                    display(Markdown(f"```text\n{traceback.format_exc()}\n```"))
+            _append_chat_message(transcript_output, "发生错误：", f"{type(exc).__name__}: {exc}", color="#d93025")
             status_label.value = "<span style='color:#d93025'>出错</span>"
         finally:
             send_button.disabled = False
@@ -196,12 +157,8 @@ def launch_notebook_chat(
         chat_state = create_chat_state(config)
         input_box.value = ""
         transcript_output.clear_output(wait=True)
-        log_output.clear_output(wait=True)
         status_label.value = ""
-        if debug:
-            render_context()
-        with transcript_output:
-            display(Markdown("**上下文已重置。**"))
+        _append_chat_message(transcript_output, "系统：", "上下文已重置。", color="#188038")
 
     send_button.on_click(handle_send)
     reset_button.on_click(handle_reset)
@@ -217,26 +174,13 @@ def launch_notebook_chat(
         widgets.HTML("<h4>聊天记录</h4>"),
         transcript_output,
     ]
-    if debug:
-        panel_children.extend(
-            [
-                widgets.HTML("<h4>工具日志</h4>"),
-                log_output,
-                widgets.HTML("<h4>当前上下文</h4>"),
-                context_output,
-            ]
-        )
     chat_panel = widgets.VBox(panel_children)
     display(chat_panel)
-    if debug:
-        render_context()
 
     return {
         "state": chat_state,
         "input_box": input_box,
         "output": transcript_output,
-        "log_output": log_output,
-        "context_output": context_output,
         "send_button": send_button,
         "reset_button": reset_button,
         "status_label": status_label,
