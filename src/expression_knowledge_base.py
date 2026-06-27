@@ -45,6 +45,75 @@ class ExpressionEntry:
     negative_cases: list[str] = field(default_factory=list)
     route_intent: list[str] = field(default_factory=list)
     interpretation: dict[str, str] = field(default_factory=dict)
+    knowledge_status: str = "known"
+    implementation_status: str = "implemented"
+    implementation_key: str = ""
+    selection_group: str = ""
+    selection_priority: int = 50
+    required_context: list[str] = field(default_factory=list)
+
+
+FACTOR_TERM_MAP: dict[str, list[str]] = {
+    "20日动量": ["momentum_20d"],
+    "月度动量": ["momentum_20d"],
+    "近期动量": ["momentum_20d"],
+    "短期动量": ["momentum_5d"],
+    "60日动量": ["momentum_60d"],
+    "相对强度": ["relative_strength_20d"],
+    "相对强弱": ["relative_strength_20d"],
+    "低波动": ["volatility_20d"],
+    "成交额放大": ["amount_ratio_20d"],
+    "成交量放大": ["volume_ratio_20d"],
+    "趋势走强": ["trend_strength"],
+    "站上20日线": ["ma_gap_20d"],
+    "突破前高": ["breakout_60d"],
+    "缩量上涨": ["reversal_5d", "amount_ratio_20d"],
+    "放量突破": ["breakout_60d", "volume_breakout_20d"],
+    "超卖": ["rsi_14d", "reversal_5d"],
+}
+
+
+CATEGORY_TERM_MAP: dict[str, str] = {
+    "动量因子": "momentum",
+    "动量类因子": "momentum",
+    "趋势因子": "trend",
+    "趋势类因子": "trend",
+    "量价因子": "volume_price",
+    "量价类因子": "volume_price",
+    "反转因子": "reversal",
+    "反转类因子": "reversal",
+    "风险因子": "risk",
+    "风险类因子": "risk",
+    "估值因子": "valuation",
+    "估值类因子": "valuation",
+    "质量因子": "quality",
+    "质量类因子": "quality",
+    "成长因子": "growth",
+    "成长类因子": "growth",
+}
+
+
+TARGET_HORIZON_PATTERNS: dict[str, int] = {
+    "下一日": 1,
+    "次日": 1,
+    "明天": 1,
+    "未来1日": 1,
+    "未来3日": 3,
+    "未来5日": 5,
+    "未来10日": 10,
+    "未来20日": 20,
+    "5日后": 5,
+    "10日后": 10,
+    "20日后": 20,
+}
+
+
+AMBIGUOUS_TERM_MAP: dict[str, list[str]] = {
+    "强弱指标": ["RSI", "相对强度", "动量", "趋势强度"],
+    "强弱": ["RSI", "相对强度", "动量", "趋势强度"],
+    "趋势指标": ["trend_strength", "ma_gap_20d", "breakout_60d"],
+    "动量指标": ["momentum_5d", "momentum_20d", "momentum_60d"],
+}
 
 
 EXPRESSION_KB: list[ExpressionEntry] = [
@@ -712,6 +781,31 @@ EXPRESSION_KB.extend(
             route_to=["condition_research", "factor_research"],
             route_intent=["condition", "factor"],
             example_queries=["BOLL下轨反弹", "突破上轨"],
+        ),
+        ExpressionEntry(
+            id="native_bbi",
+            phrase="BBI",
+            canonical_name="bbi_indicator",
+            expression_type="intent_expression",
+            layer="native_indicator",
+            category="trend_indicator",
+            meaning="多空指标，通常由多周期均线组合得到，用于观察趋势方向。",
+            synonyms=["bbi", "多空指标", "多空均线"],
+            required_columns=["close"],
+            derived_columns=["bbi"],
+            formula="BBI(close, 3, 6, 12, 24)",
+            calculation_hint="当前知识库能识别 BBI，但执行层尚未接入统一计算入口。",
+            data_dependency="ohlcv",
+            can_be_condition=True,
+            can_be_factor=True,
+            route_to=["factor_research", "manual_review"],
+            route_intent=["factor"],
+            example_queries=["BBI", "多空指标", "BBI走强"],
+            knowledge_status="known",
+            implementation_status="not_implemented",
+            implementation_key="bbi",
+            selection_group="trend",
+            selection_priority=80,
         ),
         ExpressionEntry(
             id="native_obv",
@@ -1772,6 +1866,41 @@ EXPRESSION_KB.extend(
         ),
     ]
 )
+
+
+def match_factor_terms(query: str) -> list[str]:
+    text = _normalize_text(query)
+    matched: list[str] = []
+    for term, factor_names in FACTOR_TERM_MAP.items():
+        if _normalize_text(term) in text:
+            matched.extend(factor_names)
+    return list(dict.fromkeys(matched))
+
+
+def match_category_terms(query: str) -> list[str]:
+    text = _normalize_text(query)
+    matched: list[str] = []
+    for term, category in CATEGORY_TERM_MAP.items():
+        if _normalize_text(term) in text:
+            matched.append(category)
+    return list(dict.fromkeys(matched))
+
+
+def extract_target_horizon(query: str) -> int | None:
+    text = _normalize_text(query)
+    for term, horizon in sorted(TARGET_HORIZON_PATTERNS.items(), key=lambda item: len(item[0]), reverse=True):
+        if _normalize_text(term) in text:
+            return horizon
+    return None
+
+
+def find_ambiguous_terms(query: str) -> list[str]:
+    text = _normalize_text(query)
+    matched: list[str] = []
+    for term, candidates in AMBIGUOUS_TERM_MAP.items():
+        if _normalize_text(term) in text:
+            matched.extend(candidates)
+    return list(dict.fromkeys(matched))
 
 
 def get_expression_kb() -> list[dict]:

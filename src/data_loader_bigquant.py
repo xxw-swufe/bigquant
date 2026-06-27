@@ -8,6 +8,7 @@ def load_etf_data_bigquant(
     end_date: str = "2024-12-31",
     table_name: str = "cn_fund_bar1d",
     volume_col: str = "volume",
+    **_: object,
 ) -> pd.DataFrame:
     """Load ETF factor data from BigQuant.
 
@@ -51,6 +52,7 @@ def load_condition_research_data_bigquant(
     table_name: str = "cn_fund_bar1d",
     volume_col: str = "volume",
     turnover_col: str = "turn",
+    **_: object,
 ) -> pd.DataFrame:
     """Load ETF fields used by natural-language condition studies.
 

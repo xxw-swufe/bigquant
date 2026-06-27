@@ -7,11 +7,12 @@ from pathlib import Path
 
 
 def load_deepseek_api_key(project_root: str | Path | None = None) -> str | None:
-    """Load DeepSeek API key from env or a local .env file.
+    """Load DeepSeek API key from env, a local secret file, or a .env file.
 
     Priority:
     1. DEEPSEEK_API_KEY environment variable
-    2. .env file under project_root/current working directory
+    2. .secret/deepseek_api_key.txt under project_root/current working directory
+    3. .env file under project_root/current working directory
     """
     env_key = os.getenv("DEEPSEEK_API_KEY")
     if env_key:
@@ -23,6 +24,13 @@ def load_deepseek_api_key(project_root: str | Path | None = None) -> str | None:
     roots.extend([Path.cwd(), Path.cwd().parent])
 
     for root in roots:
+        secret_path = root / ".secret" / "deepseek_api_key.txt"
+        if secret_path.exists():
+            key = secret_path.read_text(encoding="utf-8").strip()
+            if key:
+                os.environ["DEEPSEEK_API_KEY"] = key
+                return key
+
         env_path = root / ".env"
         if not env_path.exists():
             continue

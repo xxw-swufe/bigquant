@@ -9,11 +9,11 @@ from src.expression_knowledge_base import classify_expression, get_expression_by
 from src.condition_parser import parse_condition_research
 
 
-def test_generated_factors_do_not_use_future_data():
-    factors = generate_factor_candidates({})
-    assert factors
-    assert all(not factor["uses_future_data"] for factor in factors)
-    assert all("m_lead" not in factor["formula"] for factor in factors)
+def test_empty_intent_never_uses_mvp_defaults():
+    result = generate_factor_candidates({}, data_backend="local", available_fields=set())
+    assert result.status.value == "empty_intent"
+    assert result.selected_factors == []
+    assert result.unavailable_factors == []
 
 
 def test_reference_library_size_is_mvp_friendly():
@@ -34,7 +34,7 @@ def test_factor_library_has_enriched_metadata():
 def test_factor_resolver_maps_common_language():
     result = resolve_factor_intent("OBV上涨，缩量下跌")
     assert result["matched_factors"]
-    assert result["research_type"] in {"conditional_event_study", "factor_score"}
+    assert result["research_type"] in {"conditional_event_study", "factor_score", "recognized_not_implemented"}
 
 
 def test_factor_plan_and_agent_tools_exist():
@@ -186,3 +186,40 @@ def test_target_expression_stays_out_of_condition_rules():
     condition_fields = {item["field"] for item in result["conditions"]}
     assert "future_return_5d" not in condition_fields
     assert result["target"]["field"] == "future_return_5d"
+
+
+def test_target_return_column_follows_plan_horizon():
+    from src.research_plan import ResearchTarget, target_return_column
+
+    assert target_return_column(ResearchTarget(horizon=10)) == "future_return_10d"
+    assert target_return_column(ResearchTarget(horizon=5)) == "future_return_5d"
+
+
+def test_relative_strength_requires_benchmark_context():
+    from src.research_plan import FactorIntent, ResearchTarget
+
+    intent = FactorIntent(
+        raw_query="再加相对强度",
+        factor_names=["volatility_20d", "relative_strength_20d"],
+        target=ResearchTarget(horizon=5),
+        selection_source="explicit",
+    )
+    available_fields = {
+        "date",
+        "instrument",
+        "close",
+        "volume",
+        "amount",
+        "volatility_20d",
+        "relative_strength_20d",
+        "future_return_5d",
+        "future_return_10d",
+    }
+    result = generate_factor_candidates(
+        intent,
+        data_backend="local",
+        available_fields=available_fields,
+        available_context=set(),
+    )
+    assert result.status.value == "missing_context"
+    assert any(item.name == "relative_strength_20d" for item in result.unavailable_factors)

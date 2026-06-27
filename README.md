@@ -81,6 +81,50 @@ python3 run_condition_mvp_demo.py
 
 正式研究必须在 BigQuant 中使用平台 ETF 行情数据。
 
+## 本地 ETF 抓取
+
+如果你要先在本地生成真实 ETF parquet，可以使用 `src/data_fetch_akshare.py`。
+
+优先级建议：
+
+1. `data_source="auto"`: 先试东方财富，失败后自动切换到新浪
+2. `data_source="proxy_patch"`: 使用 `akshare-proxy-patch` 代理补丁优先修复东方财富链路
+3. `data_source="sina"`: 直接使用新浪历史行情源
+
+示例：
+
+```python
+from src.data_fetch_akshare import build_local_etf_parquet
+
+build_local_etf_parquet(
+    symbols=["159915", "510300"],
+    start_date="2024-01-01",
+    end_date="2024-06-30",
+    output_path="data/parquet/local_etf_daily.parquet",
+    metadata_path="data/parquet/local_etf_metadata.json",
+    data_source="auto",
+)
+```
+
+如果你要尝试 `proxy_patch` 模式，需要先安装第三方补丁包并配置 token：
+
+```bash
+pip install akshare-proxy-patch
+export AKSHARE_PROXY_PATCH_TOKEN="你的TOKEN"
+```
+
+然后把 `data_source` 改成 `proxy_patch` 即可。
+
+## 本地 DeepSeek 密钥
+
+如果你不想用环境变量，可以把 DeepSeek API Key 写到下面这个本地文件里：
+
+```text
+.secret/deepseek_api_key.txt
+```
+
+文件里只放一行 key 文本即可。这个目录已经加入 `.gitignore`，不会被提交到仓库。
+
 ## 免责声明
 
 本系统仅用于量化研究与历史回测分析，不构成任何投资建议。历史回测结果不代表未来收益。

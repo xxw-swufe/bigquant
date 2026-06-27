@@ -7,18 +7,33 @@ from typing import Any
 
 from src.condition_parser import parse_condition_research
 from src.expression_knowledge_base import classify_expression
+from src.plan_mutation import apply_plan_mutation_to_plan, build_effective_user_idea, parse_plan_mutation
+from src.research_plan import FactorResearchState, ResearchPlan, ResearchTarget, SelectionStatus
 from src.factor_resolver import resolve_factor_intent
 
 
 DEFAULT_CURRENT_CONTEXT: dict[str, Any] = {
     "intent": "factor_research",
+    "current_intent": "factor_research",
     "asset_scope": "ETF",
     "conditions": [],
     "factors": [],
+    "selected_factors": [],
+    "selected_factor_names": [],
     "target": None,
     "metrics": ["win_rate", "avg_return"],
     "sort": None,
     "filters": [],
+    "committed_plan": None,
+    "committed_selection": None,
+    "pending_mutation": None,
+    "pending_selection": None,
+    "last_error": None,
+    "selection_reasons": {},
+    "unresolved_terms": [],
+    "unavailable_factors": [],
+    "ambiguous_terms": [],
+    "selection_status": None,
     "last_result_summary": None,
     "last_question": None,
     "last_action": None,
@@ -58,10 +73,13 @@ def update_chat_state(
     parsed = _parse_user_intent(user_input, current_context)
     current_context = _merge_context(current_context, parsed, user_input)
     current_context["last_question"] = user_input
+    current_context["last_action"] = parsed.get("action")
 
     if tool_result is not None:
         current_context["last_result_summary"] = _summarize_tool_result(tool_result)
-    current_context["last_action"] = parsed.get("action")
+        selection_result = tool_result.get("selection_result") or {}
+        if selection_result:
+            current_context = _apply_selection_result_to_context(current_context, parsed, selection_result)
     new_state["current_context"] = current_context
 
     if assistant_reply is not None:
@@ -121,30 +139,48 @@ def _parse_user_intent(user_input: str, current_context: dict[str, Any]) -> dict
 
     parsed_conditions = intent_result.get("conditions", [])
     target = _extract_target_from_intent(text, kb_result, intent_result)
+    mutation = parse_plan_mutation(text, current_context)
+    committed_plan = _extract_committed_plan(current_context)
+    draft_plan = apply_plan_mutation_to_plan(committed_plan, mutation)
     factors = _extract_factor_names(intent_result)
     metrics = _extract_metrics(text, intent_result)
     sort_rule = _extract_sort(text, intent_result)
-    action = _detect_action(text, current_context, target=target)
+    action = mutation.mutation_type.value if getattr(mutation, "mutation_type", None) else _detect_action(text, current_context, target=target)
     research_type = intent_result.get("research_type", "factor_score")
     if target and target.get("field", "").startswith("future_"):
         research_type = "condition_research" if parsed_conditions else research_type
     return {
         "action": action,
         "research_type": research_type,
+        "current_intent": research_type,
+        "user_input": text,
+        "plan_mutation": mutation,
+        "effective_user_idea": build_effective_user_idea(draft_plan),
+        "pipeline_factor_names": list(draft_plan.selected_factor_names),
+        "pipeline_target": draft_plan.target.to_dict() if draft_plan.target else None,
+        "draft_plan": draft_plan.to_dict(),
+        "committed_plan": committed_plan.to_dict(),
         "matched_expressions": kb_result.get("matched", []),
         "conditions": parsed_conditions,
         "target": target,
         "factors": factors,
+        "selected_factors": factors,
         "metrics": metrics,
         "sort": sort_rule,
         "route_intent": intent_result.get("route_intent", kb_result.get("route_intent", [])),
+        "selection_reasons": {},
+        "unresolved_terms": intent_result.get("unresolved_terms", []),
+        "recognized_not_implemented_terms": intent_result.get("recognized_not_implemented_terms", []),
+        "unavailable_factors": intent_result.get("recognized_not_implemented_terms", []),
+        "ambiguous_terms": intent_result.get("ambiguous_terms", []),
+        "selection_status": intent_result.get("research_type"),
     }
 
 
 def _merge_context(current_context: dict[str, Any], parsed: dict[str, Any], user_input: str) -> dict[str, Any]:
     context = deepcopy(current_context)
     action = parsed.get("action") or "append"
-    if action in {"replace", "reset"}:
+    if action in {"replace", "reset"} and parsed.get("plan_mutation") is None:
         context["conditions"] = []
         context["factors"] = []
         context["target"] = None
@@ -157,7 +193,7 @@ def _merge_context(current_context: dict[str, Any], parsed: dict[str, Any], user
         else:
             context["conditions"] = _dedupe_conditions(context.get("conditions", []) + parsed["conditions"])
 
-    if parsed.get("factors"):
+    if parsed.get("factors") and parsed.get("plan_mutation") is None:
         if action == "replace":
             context["factors"] = list(parsed["factors"])
         else:
@@ -175,6 +211,12 @@ def _merge_context(current_context: dict[str, Any], parsed: dict[str, Any], user
 
     context["filters"] = _derive_filters(context)
     context["last_action"] = action
+    if parsed.get("plan_mutation") is not None:
+        context["pending_mutation"] = parsed["plan_mutation"].to_dict()
+        context["pending_selection"] = None
+        context["effective_user_idea"] = parsed.get("effective_user_idea")
+        context["draft_plan"] = parsed.get("draft_plan")
+        context["committed_plan"] = parsed.get("committed_plan")
     return context
 
 
@@ -255,6 +297,93 @@ def _extract_factor_names(intent_result: dict) -> list[str]:
         return list(factors)
     factor_plan = intent_result.get("factor_plan") or []
     return [item.get("name") for item in factor_plan if item.get("name")]
+
+
+def _extract_committed_plan(current_context: dict[str, Any]) -> ResearchPlan:
+    committed = current_context.get("committed_plan")
+    if isinstance(committed, dict):
+        return ResearchPlan(
+            selected_factor_names=list(committed.get("selected_factor_names", [])),
+            target=_coerce_target(committed.get("target")),
+            selection_source=str(committed.get("selection_source") or current_context.get("selection_source") or "semantic_match"),
+            selection_status=_coerce_selection_status(committed.get("selection_status")),
+        )
+    selected_factors = _extract_selected_factors(current_context)
+    return ResearchPlan(
+        selected_factor_names=[factor.get("name") for factor in selected_factors if factor.get("name")],
+        target=_coerce_target(current_context.get("target")),
+        selection_source=str(current_context.get("selection_source") or "semantic_match"),
+        selection_status=_coerce_selection_status(current_context.get("selection_status")),
+    )
+
+
+def _extract_selected_factors(current_context: dict[str, Any]) -> list[dict[str, Any]]:
+    selected = current_context.get("selected_factors") or current_context.get("factors") or []
+    return [item for item in selected if isinstance(item, dict)]
+
+
+def _coerce_target(target: Any | None) -> ResearchTarget:
+    if isinstance(target, ResearchTarget):
+        return target
+    if isinstance(target, dict):
+        return ResearchTarget(metric=target.get("metric", "future_return"), horizon=int(target.get("horizon", 5)))
+    return ResearchTarget()
+
+
+def _coerce_selection_status(value: Any | None) -> SelectionStatus:
+    if isinstance(value, SelectionStatus):
+        return value
+    if isinstance(value, str):
+        try:
+            return SelectionStatus(value)
+        except ValueError:
+            return SelectionStatus.EMPTY_INTENT
+    return SelectionStatus.EMPTY_INTENT
+
+
+def _apply_selection_result_to_context(
+    context: dict[str, Any],
+    parsed: dict[str, Any],
+    selection_result: dict[str, Any],
+) -> dict[str, Any]:
+    new_context = deepcopy(context)
+    can_execute = bool(selection_result.get("can_execute"))
+    draft_plan = parsed.get("draft_plan") or {}
+    mutation = parsed.get("plan_mutation")
+    if can_execute:
+        selected_factors = selection_result.get("selected_factors", [])
+        selected_factor_names = [factor.get("name") for factor in selected_factors if factor.get("name")]
+        target = selection_result.get("target") or draft_plan.get("target") or new_context.get("target")
+        committed_plan = {
+            "selected_factor_names": selected_factor_names,
+            "target": target,
+            "selection_source": selection_result.get("selection_source") or draft_plan.get("selection_source") or "semantic_match",
+            "selection_status": selection_result.get("status"),
+        }
+        new_context["committed_plan"] = committed_plan
+        new_context["committed_selection"] = selection_result
+        new_context["pending_mutation"] = None
+        new_context["pending_selection"] = None
+        new_context["last_error"] = None
+        new_context["selected_factors"] = selected_factors
+        new_context["selected_factor_names"] = selected_factor_names
+        new_context["factors"] = selected_factors
+        new_context["target"] = target
+        new_context["selection_reasons"] = selection_result.get("selection_reasons", {})
+        new_context["unresolved_terms"] = selection_result.get("unresolved_terms", [])
+        new_context["unavailable_factors"] = selection_result.get("unavailable_factors", [])
+        new_context["ambiguous_terms"] = selection_result.get("ambiguous_terms", [])
+        new_context["selection_status"] = selection_result.get("status")
+        return new_context
+
+    new_context["pending_mutation"] = mutation.to_dict() if mutation else None
+    new_context["pending_selection"] = selection_result
+    new_context["last_error"] = selection_result.get("status") or "selection_failed"
+    new_context["selection_status"] = selection_result.get("status")
+    new_context["unresolved_terms"] = selection_result.get("unresolved_terms", [])
+    new_context["unavailable_factors"] = selection_result.get("unavailable_factors", [])
+    new_context["ambiguous_terms"] = selection_result.get("ambiguous_terms", [])
+    return new_context
 
 
 def _derive_filters(context: dict[str, Any]) -> list[dict[str, Any]]:

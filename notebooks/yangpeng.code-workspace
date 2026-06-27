@@ -1,0 +1,27 @@
+{
+  "folders": [
+    {
+      "path": "..",
+      "name": "AutoETF"
+    }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "/Users/yangpeng/Desktop/ai量化/.venv-vscode/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.venvPath": "/Users/yangpeng/Desktop/ai量化",
+    "python.venvFolders": [
+      ".venv-vscode",
+      ".venv"
+    ],
+    "python.analysis.extraPaths": [
+      "/Users/yangpeng/Desktop/ai量化",
+      "/Users/yangpeng/Desktop/ai量化/src"
+    ],
+    "jupyter.askForKernelRestart": false,
+    "explorer.excludeGitIgnore": false,
+    "files.exclude": {
+      "**/.venv-vscode": false,
+      "**/.venv": false
+    }
+  }
+}

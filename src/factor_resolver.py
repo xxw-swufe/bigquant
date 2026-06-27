@@ -1,119 +1,235 @@
-"""Resolve natural language factor intents into factor candidates and rules."""
+"""Resolve natural language factor intents into structured research plans."""
 
 from __future__ import annotations
 
-from src.expression_knowledge_base import classify_expression, search_expressions
+import re
+from collections.abc import Iterable
+
 from src.etf_factor_library import get_factor_library, search_factors
-from src.factor_availability import select_factor_plan
+from src.expression_knowledge_base import (
+    CATEGORY_TERM_MAP,
+    FACTOR_TERM_MAP,
+    TARGET_HORIZON_PATTERNS,
+    classify_expression,
+    extract_target_horizon,
+    find_ambiguous_terms,
+    match_category_terms,
+    match_factor_terms,
+)
+from src.research_plan import FactorIntent, ResearchTarget
 
 
-def resolve_factor_intent(user_idea: str) -> dict:
-    """Resolve a user's idea into searchable factor candidates.
-
-    The MVP uses keyword search and lightweight rule heuristics. Later we can
-    swap in LLM-based parsing without changing downstream tool contracts.
-    """
-    text = user_idea.strip()
+def resolve_factor_intent(user_idea: str) -> FactorIntent:
+    """Map a natural-language request onto a structured factor intent."""
+    text = (user_idea or "").strip()
     kb_result = classify_expression(text)
-    matched_expression = kb_result.get("best_match") or {}
-    factors = search_factors(text, limit=20)
-    tokens = [token for token in _split_tokens(text) if token]
-    library_index = {factor["name"]: factor for factor in get_factor_library()}
+    best_match = kb_result.get("best_match") or {}
+    matched_expressions = kb_result.get("matched", [])
+    factor_index = {factor["name"]: factor for factor in get_factor_library()}
 
-    conditions = []
-    research_type = "factor_score"
-    route_intent = ["factor"]
-    if matched_expression.get("expression_type") == "condition_expression":
+    target = ResearchTarget(horizon=extract_target_horizon(text) or 5)
+    factor_names: list[str] = []
+    categories: list[str] = []
+    explicit_terms: list[str] = []
+    unresolved_terms: list[str] = []
+    ambiguous_terms = find_ambiguous_terms(text)
+    recognized_not_implemented_terms: list[str] = []
+    selection_source = "semantic_match"
+    research_type = "factor_research"
+
+    if best_match.get("expression_type") == "condition_expression":
         research_type = "conditional_event_study"
-        route_intent = ["condition"]
-        conditions = _build_condition_rules(tokens, matched_expression)
-    elif matched_expression.get("expression_type") == "target_expression":
+    elif best_match.get("expression_type") == "target_expression":
         research_type = "target_analysis"
-        route_intent = ["target"]
-    elif matched_expression.get("expression_type") == "metric_expression":
-        research_type = "metric_analysis"
-        route_intent = ["metric"]
-    elif matched_expression.get("phrase") in {"量价分", "动量分", "趋势分", "反转分", "风险分", "估值分", "质量分", "成长分"}:
+    elif best_match.get("expression_type") == "metric_expression":
         research_type = "composite_score_analysis"
-        route_intent = ["metric", "factor"]
 
-    factor_plan = select_factor_plan(factors, max_factors=8) if factors else []
-    factor_names = [factor["name"] for factor in factor_plan]
+    factor_names.extend(_match_canonical_factor_names(text, factor_index))
+    factor_names.extend(match_factor_terms(text))
+    if factor_names:
+        explicit_terms.extend(_factor_names_to_terms(factor_names))
+        selection_source = "explicit"
 
-    return {
-        "user_idea": user_idea,
-        "research_type": research_type,
-        "matched_tokens": tokens,
-        "matched_factors": factors,
-        "matched_expressions": kb_result.get("matched", []),
-        "expression_match": matched_expression,
-        "factor_plan": factor_plan,
-        "factor_names": factor_names,
-        "conditions": conditions,
-        "available_factor_count": len(library_index),
-        "route_intent": route_intent,
-        "route_to": matched_expression.get("route_to", []),
-        "notes": _build_notes(factors),
-    }
+    categories.extend(match_category_terms(text))
+    if categories and not factor_names:
+        selection_source = "category_expansion"
 
-
-def _split_tokens(text: str) -> list[str]:
-    for sep in ["，", ",", "。", "；", ";", " "]:
-        text = text.replace(sep, "|")
-    return [token for token in text.split("|") if token]
-
-
-def _looks_like_condition_query(text: str) -> bool:
-    keywords = ["上涨", "下跌", "放量", "缩量", "突破", "反弹", "超卖", "超买", "金叉", "死叉"]
-    return any(keyword in text for keyword in keywords)
-
-
-def _build_condition_rules(tokens: list[str], matched_expression: dict | None = None) -> list[dict]:
-    rules = []
-    joined = " ".join(tokens)
-    if matched_expression:
-        rules.append(
-            {
-                "field": (matched_expression.get("derived_columns") or [matched_expression.get("canonical_name")])[0],
-                "operator": matched_expression.get("operator", ">"),
-                "value": matched_expression.get("threshold", 0),
-                "description": matched_expression.get("meaning", matched_expression.get("phrase")),
-            }
-        )
-    if "放量" in joined or "量比" in joined:
-        rules.append({"field": "amount_ratio_20d", "operator": ">", "value": 1.0})
-    if "缩量" in joined:
-        rules.append({"field": "amount_ratio_20d", "operator": "<", "value": 1.0})
-    if "上涨" in joined:
-        rules.append({"field": "return_1d", "operator": ">", "value": 0.0})
-    if "下跌" in joined:
-        rules.append({"field": "return_1d", "operator": "<", "value": 0.0})
-    if "OBV" in joined.upper():
-        rules.append({"field": "obv_trend_20d", "operator": ">", "value": 0.0})
-    if "趋势走强" in joined or "走强" in joined or "强趋势" in joined:
-        rules.append({"field": "trend_persistence_20d", "operator": ">", "value": 0.6})
-        rules.append({"field": "ma_gap_20d", "operator": ">", "value": 0.0})
-    if "过热" in joined or "高位" in joined:
-        rules.append({"field": "rsi_overbought_20d", "operator": ">", "value": 0.0})
-    if "缩量下跌" in joined or ("缩量" in joined and "下跌" in joined):
-        rules.append({"field": "amount_ratio_20d", "operator": "<", "value": 1.0})
-        rules.append({"field": "return_1d", "operator": "<", "value": 0.0})
-        rules.append({"field": "obv_trend_20d", "operator": "<", "value": 0.0})
-    deduped = []
-    seen = set()
-    for rule in rules:
-        key = (rule["field"], rule["operator"], repr(rule["value"]))
-        if key in seen:
+    for expr in matched_expressions:
+        if expr.get("expression_type") == "target_expression":
+            target = ResearchTarget(
+                metric="future_return",
+                horizon=int(_expression_horizon(expr, text)),
+            )
             continue
-        seen.add(key)
-        deduped.append(rule)
-    return deduped
+        phrase = str(expr.get("phrase") or "").strip()
+        canonical_name = str(expr.get("canonical_name") or "").strip()
+        if expr.get("implementation_status") == "not_implemented" or (
+            expr.get("expression_type") == "intent_expression" and canonical_name not in factor_index
+        ):
+            term = phrase or canonical_name
+            if term and term not in recognized_not_implemented_terms:
+                recognized_not_implemented_terms.append(term)
+
+    if not factor_names and not categories:
+        semantic_candidates = _semantic_factor_candidates(text, factor_index)
+        if semantic_candidates:
+            factor_names.extend(semantic_candidates)
+            selection_source = "semantic_match"
+
+    if not factor_names and not categories and not recognized_not_implemented_terms and not ambiguous_terms:
+        unresolved_terms = _extract_unknown_terms(text)
+
+    if not unresolved_terms and not factor_names and not categories and not recognized_not_implemented_terms:
+        selection_source = "empty_intent"
+
+    if not ambiguous_terms and _looks_ambiguous(text):
+        ambiguous_terms = _extract_ambiguous_candidates(text)
+
+    confidence = _estimate_confidence(
+        factor_names=factor_names,
+        categories=categories,
+        unresolved_terms=unresolved_terms,
+        ambiguous_terms=ambiguous_terms,
+        recognized_not_implemented_terms=recognized_not_implemented_terms,
+    )
+
+    route_intent = _dedupe_list(
+        list(kb_result.get("route_intent", []))
+        + (["factor"] if factor_names or categories else [])
+        + (["manual_review"] if recognized_not_implemented_terms or ambiguous_terms else [])
+    )
+    route_to = _dedupe_list(
+        list(kb_result.get("route_to", []))
+        + (["factor_research"] if factor_names or categories else [])
+        + (["manual_review"] if recognized_not_implemented_terms or ambiguous_terms else [])
+    )
+
+    factor_plan = [factor_index[name] for name in factor_names if name in factor_index]
+    expression_match = kb_result.get("best_match") or None
+
+    return FactorIntent(
+        raw_query=text,
+        research_mode="factor",
+        research_type="recognized_not_implemented" if recognized_not_implemented_terms else research_type,
+        explicit_terms=explicit_terms,
+        factor_names=_dedupe_list(factor_names),
+        categories=_dedupe_list(categories),
+        target=target,
+        unresolved_terms=_dedupe_list(unresolved_terms),
+        ambiguous_terms=_dedupe_list(ambiguous_terms),
+        recognized_not_implemented_terms=_dedupe_list(recognized_not_implemented_terms),
+        confidence=confidence,
+        selection_source=selection_source,
+        route_intent=route_intent,
+        route_to=route_to,
+        matched_factors=list(factor_plan),
+        matched_expressions=matched_expressions,
+        factor_plan=factor_plan,
+        expression_match=expression_match,
+    )
 
 
-def _build_notes(factors: list[dict]) -> list[str]:
-    if not factors:
-        return ["未直接匹配到标准因子，建议扩充 aliases 或补充原生指标映射。"]
-    notes = [f"matched: {factor['name']}" for factor in factors[:5]]
-    if len(factors) > 5:
-        notes.append(f"还有 {len(factors) - 5} 个候选因子未展开。")
-    return notes
+def _semantic_factor_candidates(text: str, factor_index: dict[str, dict]) -> list[str]:
+    candidates: list[str] = []
+    for factor in search_factors(text, limit=20):
+        name = factor.get("name")
+        if name not in factor_index:
+            continue
+        candidates.append(name)
+    return _dedupe_list(candidates)
+
+
+def _match_canonical_factor_names(text: str, factor_index: dict[str, dict]) -> list[str]:
+    normalized = text.lower()
+    matched = []
+    for name in factor_index:
+        if name.lower() in normalized:
+            matched.append(name)
+    return _dedupe_list(matched)
+
+
+def _factor_names_to_terms(factor_names: Iterable[str]) -> list[str]:
+    names = set(factor_names)
+    terms = []
+    for term, mapped_names in FACTOR_TERM_MAP.items():
+        if names.intersection(mapped_names):
+            terms.append(term)
+    return _dedupe_list(terms)
+
+
+def _extract_unknown_terms(text: str) -> list[str]:
+    stop_terms = {
+        "帮我做一个",
+        "帮我",
+        "ETF",
+        "ETF因子研究",
+        "因子研究",
+        "研究",
+        "做一个",
+        "分析",
+        "看看",
+        "一下",
+        "这个",
+        "一个",
+    }
+    candidates = []
+    for token in re.findall(r"[A-Z]{2,}|[\u4e00-\u9fa5]{2,}(?:指标|因子|均线|线|分)?", text):
+        normalized = token.strip()
+        if not normalized or normalized in {"指标", "因子", "均线", "线", "分"}:
+            continue
+        if normalized in stop_terms or any(term in normalized for term in stop_terms):
+            continue
+        if normalized in FACTOR_TERM_MAP or normalized in CATEGORY_TERM_MAP or normalized in TARGET_HORIZON_PATTERNS:
+            continue
+        candidates.append(normalized)
+    return _dedupe_list(candidates)
+
+
+def _extract_ambiguous_candidates(text: str) -> list[str]:
+    candidates = []
+    if "强弱" in text:
+        candidates.extend(["RSI", "相对强度", "动量", "趋势强度"])
+    if "趋势" in text and "因子" in text:
+        candidates.extend(["trend_strength", "ma_gap_20d", "breakout_60d"])
+    if "动量" in text and "因子" in text:
+        candidates.extend(["momentum_5d", "momentum_20d", "momentum_60d"])
+    return _dedupe_list(candidates)
+
+
+def _looks_ambiguous(text: str) -> bool:
+    return any(keyword in text for keyword in ["强弱指标", "强弱", "趋势指标", "动量指标"])
+
+
+def _expression_horizon(entry: dict, text: str) -> int:
+    if entry.get("default_window") is not None:
+        return int(entry["default_window"])
+    horizon = extract_target_horizon(text)
+    return horizon or 5
+
+
+def _estimate_confidence(
+    *,
+    factor_names: list[str],
+    categories: list[str],
+    unresolved_terms: list[str],
+    ambiguous_terms: list[str],
+    recognized_not_implemented_terms: list[str],
+) -> float:
+    score = 0.0
+    score += min(len(factor_names) * 0.35, 0.7)
+    score += min(len(categories) * 0.2, 0.3)
+    score -= min(len(unresolved_terms) * 0.3, 0.6)
+    score -= min(len(ambiguous_terms) * 0.25, 0.5)
+    score -= min(len(recognized_not_implemented_terms) * 0.1, 0.2)
+    return max(0.0, min(0.99, score))
+
+
+def _dedupe_list(items: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result

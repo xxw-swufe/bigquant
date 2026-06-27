@@ -27,9 +27,40 @@ def generate_report(
         f"- 预测目标：{', '.join(hypothesis.get('prediction_targets', []))}",
         f"- 组合规则：{hypothesis.get('portfolio_rule')}",
         "",
+    ]
+    selection_result = hypothesis.get("selection_result") or {}
+    if selection_result:
+        lines.extend(
+            [
+                "## 2. 研究计划",
+                "",
+                f"- 研究状态：{selection_result.get('status')}",
+                f"- 是否可执行：{selection_result.get('can_execute')}",
+                f"- 目标周期：未来 {selection_result.get('target', {}).get('horizon')} 日",
+                "",
+            ]
+        )
+        selected_factors = selection_result.get("selected_factors", [])
+        if selected_factors:
+            lines.append("### 选择的因子")
+            lines.append("")
+            for factor in selected_factors:
+                lines.append(f"- {factor['name']}：{factor.get('description', '')}")
+            lines.append("")
+        reasons = selection_result.get("selection_reasons", {})
+        if reasons:
+            lines.append("### 选择原因")
+            lines.append("")
+            for name, reason in reasons.items():
+                lines.append(f"- {name}: {reason}")
+            lines.append("")
+
+    lines.extend(
+        [
         "## 3. 候选因子定义",
         "",
-    ]
+        ]
+    )
     for factor in factors:
         lines.extend(
             [

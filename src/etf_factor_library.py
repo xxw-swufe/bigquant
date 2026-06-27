@@ -21,15 +21,137 @@ from __future__ import annotations
 import re
 
 
+LOCAL_SUPPORTED_FACTOR_NAMES = {
+    "momentum_5d",
+    "momentum_20d",
+    "momentum_60d",
+    "ma_gap_20d",
+    "ma_gap_60d",
+    "trend_strength",
+    "relative_strength_20d",
+    "relative_strength_60d",
+    "amount_ratio_20d",
+    "volume_ratio_20d",
+    "liquidity_20d",
+    "volatility_20d",
+    "volatility_60d",
+    "risk_adjusted_momentum_20d",
+    "drawdown_20d",
+    "price_volume_confirm_20d",
+    "intraday_strength",
+    "volume_price_divergence_20d",
+    "volume_breakout_20d",
+    "obv_20d",
+    "obv_trend_20d",
+    "reversal_5d",
+    "ma_deviation_reversal_20d",
+    "rsi_14d",
+    "new_high_distance_60d",
+    "breakout_60d",
+    "ma_alignment_score",
+    "downside_volatility_20d",
+    "crowding_amount_ratio_5d",
+    "short_term_overheat_5d",
+    "beta_60d",
+}
+
+BIGQUANT_SUPPORTED_FACTOR_NAMES = {
+    "momentum_20d",
+    "trend_strength",
+    "relative_strength_20d",
+    "amount_ratio_20d",
+    "volatility_20d",
+    "volume_ratio_20d",
+    "volume_price_divergence_20d",
+    "volume_breakout_20d",
+    "reversal_5d",
+    "ma_deviation_reversal_20d",
+    "new_high_distance_60d",
+    "breakout_60d",
+    "ma_alignment_score",
+    "crowding_amount_ratio_5d",
+    "short_term_overheat_5d",
+}
+
+BENCHMARK_REQUIRED_FACTOR_NAMES = {
+    "relative_strength_20d",
+    "relative_strength_60d",
+    "beta_60d",
+}
+
+SELECTION_GROUP_MAP = {
+    "momentum_5d": "absolute_momentum",
+    "momentum_20d": "absolute_momentum",
+    "momentum_60d": "absolute_momentum",
+    "ma_gap_20d": "trend",
+    "ma_gap_60d": "trend",
+    "trend_strength": "trend",
+    "ma_alignment_score": "trend",
+    "breakout_60d": "trend",
+    "new_high_distance_60d": "trend",
+    "relative_strength_20d": "relative_momentum",
+    "relative_strength_60d": "relative_momentum",
+    "amount_ratio_20d": "volume_price",
+    "volume_ratio_20d": "volume_price",
+    "liquidity_20d": "volume_price",
+    "volume_price_divergence_20d": "volume_price",
+    "volume_breakout_20d": "volume_price",
+    "price_volume_confirm_20d": "volume_price",
+    "obv_20d": "volume_pressure",
+    "obv_trend_20d": "volume_pressure",
+    "volatility_20d": "risk",
+    "volatility_60d": "risk",
+    "risk_adjusted_momentum_20d": "risk_adjusted",
+    "drawdown_20d": "risk",
+    "downside_volatility_20d": "risk",
+    "crowding_amount_ratio_5d": "crowding",
+    "short_term_overheat_5d": "crowding",
+    "reversal_5d": "reversal",
+    "ma_deviation_reversal_20d": "reversal",
+    "rsi_14d": "reversal",
+    "beta_60d": "risk",
+    "intraday_strength": "kbar",
+}
+
+SELECTION_PRIORITY_MAP = {
+    "momentum_20d": 100,
+    "trend_strength": 95,
+    "relative_strength_20d": 90,
+    "amount_ratio_20d": 90,
+    "volatility_20d": 90,
+    "momentum_5d": 70,
+    "momentum_60d": 70,
+    "ma_gap_20d": 85,
+    "ma_gap_60d": 75,
+    "volume_ratio_20d": 80,
+    "price_volume_confirm_20d": 80,
+    "breakout_60d": 80,
+    "new_high_distance_60d": 75,
+    "risk_adjusted_momentum_20d": 85,
+    "drawdown_20d": 70,
+    "rsi_14d": 70,
+    "obv_20d": 70,
+    "obv_trend_20d": 70,
+}
+
+
 BASE_FACTOR_METADATA = {
+    "knowledge_status": "known",
+    "implementation_status": None,
+    "implementation_key": None,
     "asset_scope": ["ETF"],
     "default_period": None,
     "optional_periods": [],
     "data_dependency": "ohlcv",
+    "required_fields": [],
+    "required_context": [],
+    "supported_backends": [],
     "correlated_with": [],
     "is_redundant_with": [],
     "enter_final_score": True,
     "default_weight": None,
+    "selection_group": None,
+    "selection_priority": 50,
     "missing_value_handling": "drop_or_fill",
     "outlier_handling": "clip_rank",
     "standardization": "cross_section_rank",
@@ -636,6 +758,57 @@ def _infer_data_dependency(factor: dict) -> str:
     return factor.get("data_dependency", "ohlcv")
 
 
+def _infer_required_context(factor: dict) -> list[str]:
+    name = factor.get("name", "")
+    context = list(factor.get("required_context", []))
+    if name in BENCHMARK_REQUIRED_FACTOR_NAMES:
+        context.append("benchmark_series")
+    if factor.get("category") in {"quality", "growth"}:
+        context.append("constituent_data")
+    return list(dict.fromkeys(context))
+
+
+def _infer_supported_backends(factor: dict) -> list[str]:
+    name = factor.get("name", "")
+    supported = []
+    if name in LOCAL_SUPPORTED_FACTOR_NAMES:
+        supported.append("local")
+    if name in BIGQUANT_SUPPORTED_FACTOR_NAMES:
+        supported.append("bigquant")
+    return supported
+
+
+def _infer_implementation_status(factor: dict, supported_backends: list[str]) -> str:
+    if supported_backends:
+        return "implemented"
+    if factor.get("knowledge_status") == "known":
+        return "not_implemented"
+    return "unknown"
+
+
+def _infer_selection_group(factor: dict) -> str:
+    name = factor.get("name", "")
+    if name in SELECTION_GROUP_MAP:
+        return SELECTION_GROUP_MAP[name]
+    category = factor.get("category", "")
+    if category in {"momentum", "trend", "liquidity", "risk", "reversal", "crowding", "breakout", "price_volume", "volume_pressure"}:
+        return category
+    if category in {"relative_strength"}:
+        return "relative_momentum"
+    return "misc"
+
+
+def _infer_selection_priority(factor: dict) -> int:
+    name = factor.get("name", "")
+    if name in SELECTION_PRIORITY_MAP:
+        return SELECTION_PRIORITY_MAP[name]
+    if factor.get("mvp_default"):
+        return 80
+    if factor.get("category") in {"trend", "momentum", "liquidity", "risk"}:
+        return 60
+    return 40
+
+
 def _infer_layer(factor: dict) -> str:
     if factor.get("is_raw_indicator"):
         return "raw_data"
@@ -677,6 +850,7 @@ def _infer_required_columns(factor: dict) -> list[str]:
 def _enrich_factor(factor: dict) -> dict:
     enriched = BASE_FACTOR_METADATA.copy()
     enriched.update(factor)
+    enriched["implementation_key"] = enriched.get("implementation_key") or enriched["name"]
     enriched["default_period"] = enriched.get("default_period") or _infer_default_period(enriched["name"])
     enriched["aliases"] = enriched.get("aliases") or _infer_aliases(enriched)
     enriched["correlated_with"] = enriched.get("correlated_with") or _infer_correlated_with(
@@ -686,6 +860,14 @@ def _enrich_factor(factor: dict) -> dict:
     enriched["score_shape"] = enriched.get("score_shape") or _infer_score_shape(enriched)
     enriched["data_dependency"] = _infer_data_dependency(enriched)
     enriched["required_columns"] = enriched.get("required_columns") or _infer_required_columns(enriched)
+    enriched["required_fields"] = enriched.get("required_fields") or list(enriched["required_columns"])
+    enriched["required_context"] = _infer_required_context(enriched)
+    enriched["supported_backends"] = enriched.get("supported_backends") or _infer_supported_backends(enriched)
+    enriched["implementation_status"] = enriched.get("implementation_status") or _infer_implementation_status(
+        enriched, enriched["supported_backends"]
+    )
+    enriched["selection_group"] = enriched.get("selection_group") or _infer_selection_group(enriched)
+    enriched["selection_priority"] = int(enriched.get("selection_priority") or _infer_selection_priority(enriched))
     enriched["bigquant_ready"] = _infer_bigquant_ready(enriched)
     enriched["layer"] = _infer_layer(enriched)
     if enriched.get("mvp_default") and enriched.get("default_weight") is None:
