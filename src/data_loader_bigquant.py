@@ -31,6 +31,7 @@ def load_etf_data_bigquant(
         amount / m_avg(amount, 20) AS amount_ratio_20d,
         m_avg(close, 5) / m_avg(close, 20) - 1 AS trend_strength,
         m_stddev(close / m_lag(close, 1) - 1, 20) AS volatility_20d,
+        100 * m_avg(greatest(close / m_lag(close, 1) - 1, 0), 14) / (m_avg(abs(close / m_lag(close, 1) - 1), 14) + 0.001) AS rsi_14d,
         m_lead(close, 5) / close - 1 AS future_return_5d,
         m_lead(close, 20) / close - 1 AS future_return_20d
     FROM {table_name}
@@ -84,6 +85,7 @@ def load_condition_research_data_bigquant(
         m_avg(close, 20) AS ma_20d,
         m_avg(close, 60) AS ma_60d,
         m_avg(close, 5) / m_avg(close, 20) - 1 AS trend_strength,
+        100 * m_avg(greatest(close / m_lag(close, 1) - 1, 0), 14) / (m_avg(abs(close / m_lag(close, 1) - 1), 14) + 0.001) AS rsi_14d,
         m_lead(close, 1) / close - 1 AS future_return_1d,
         m_lead(close, 5) / close - 1 AS future_return_5d,
         m_lead(close, 10) / close - 1 AS future_return_10d,

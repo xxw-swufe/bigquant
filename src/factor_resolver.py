@@ -37,13 +37,10 @@ def resolve_factor_intent(user_idea: str) -> FactorIntent:
     selection_source = "semantic_match"
     research_type = "factor_research"
 
-    if best_match.get("expression_type") == "condition_expression":
-        research_type = "conditional_event_study"
-    elif best_match.get("expression_type") == "target_expression":
-        research_type = "target_analysis"
-    elif best_match.get("expression_type") == "metric_expression":
-        research_type = "composite_score_analysis"
-
+    # Match factor names & categories FIRST so the multi-factor signal can
+    # override an ambiguous "condition_expression" / "target_expression" tag
+    # coming from a single phrase like "成交额放大" (which KB may tag as
+    # condition_expression even when the user wants it as a scoring factor).
     factor_names.extend(_match_canonical_factor_names(text, factor_index))
     factor_names.extend(match_factor_terms(text))
     if factor_names:
@@ -54,6 +51,50 @@ def resolve_factor_intent(user_idea: str) -> FactorIntent:
     if categories and not factor_names:
         selection_source = "category_expansion"
 
+    # Determine research_type. Priority order:
+    #   1. Condition-research lexical cues win over factor matching.
+    #      Phrases like "概率", "胜率", "反弹", "上涨概率" + condition
+    #      phrasing ("X 后", "突破", "放量") clearly point at an event study.
+    #   2. >=2 factor_names OR any factor_name + category  -> factor_research
+    #      (user is asking for a multi-factor study; condition-style
+    #      phrasing like "成交额放大" describes direction, not filtering)
+    #   3. explicit single factor_name                        -> factor_research
+    #      (same reasoning: a named factor implies a factor study)
+    #   4. best_match expression type                        -> condition / target / metric
+    #   5. fallback                                           -> factor_research
+    condition_cue_terms = (
+        "上涨概率", "胜率", "反弹", "下跌概率", "上涨情况", "下跌情况",
+        "下一日", "次日", "隔日", "未来1日", "未来1日上涨", "概率是否",
+    )
+    has_condition_cue = any(cue in text for cue in condition_cue_terms)
+
+    if has_condition_cue:
+        # Condition-style question — condition cue wins over factor
+        # matching. The user is asking "X conditions are met → what is the
+        # up-probability" which is fundamentally a conditional study, not
+        # a multi-factor scoring study, regardless of how many factor
+        # names incidentally match the lexical KB.
+        research_type = "conditional_event_study"
+    else:
+        # No condition cue — lean on factor signals.
+        if len(factor_names) >= 2 or (factor_names and categories):
+            research_type = "factor_research"
+        elif factor_names:
+            research_type = "factor_research"
+        elif best_match.get("expression_type") == "condition_expression":
+            research_type = "conditional_event_study"
+        elif best_match.get("expression_type") == "target_expression":
+            research_type = "target_analysis"
+        elif best_match.get("expression_type") == "metric_expression":
+            research_type = "composite_score_analysis"
+
+    # INTENT_EXPRESSION_ALIASES maps KB intent names (e.g. "rsi_indicator")
+    # onto actual factor names in the factor library (e.g. "rsi_14d"). Keep
+    # this table tiny on purpose: today it only maps RSI, so that expanding
+    # the bridge is an explicit, audited decision per factor.
+    intent_expression_aliases = {
+        "rsi_indicator": "rsi_14d",
+    }
     for expr in matched_expressions:
         if expr.get("expression_type") == "target_expression":
             target = ResearchTarget(
@@ -63,6 +104,13 @@ def resolve_factor_intent(user_idea: str) -> FactorIntent:
             continue
         phrase = str(expr.get("phrase") or "").strip()
         canonical_name = str(expr.get("canonical_name") or "").strip()
+        if expr.get("expression_type") == "intent_expression" and canonical_name in intent_expression_aliases:
+            mapped = intent_expression_aliases[canonical_name]
+            if mapped in factor_index and mapped not in factor_names:
+                factor_names.append(mapped)
+                if phrase and phrase not in explicit_terms:
+                    explicit_terms.append(phrase)
+            continue
         if expr.get("implementation_status") == "not_implemented" or (
             expr.get("expression_type") == "intent_expression" and canonical_name not in factor_index
         ):
