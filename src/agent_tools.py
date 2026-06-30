@@ -11,6 +11,7 @@ from src.condition_report import generate_condition_report
 from src.data_access import load_condition_research_data, load_etf_data
 from src.data_probe_bigquant import run_data_probe
 from src.factor_analysis import run_factor_analysis
+from src.factor_evaluator import ensure_factors_available
 from src.factor_availability import build_factor_tool_payload, get_available_factors
 from src.factor_generator import generate_factor_candidates
 from src.factor_resolver import resolve_factor_intent
@@ -152,7 +153,29 @@ def tool_run_factor_research_pipeline(
         }
 
     factors = selection.selected_factors
-    factor_cols = [factor["name"] for factor in factors if factor["name"] in df.columns]
+    requested_factor_names = [factor["name"] for factor in factors]
+    availability = ensure_factors_available(df, requested_factor_names)
+    if not availability.ok:
+        return {
+            "hypothesis": _with_selection_payload(hypothesis, selection),
+            "selection_result": selection.to_dict(),
+            "probe_tables": list(probe_results.keys()),
+            "data_shape": df.shape,
+            "status": "factors_unavailable",
+            "availability": {
+                "existing": list(availability.existing_factors),
+                "computed": list(availability.computed_factors),
+                "not_implemented": list(availability.not_implemented),
+                "missing_required_fields": list(availability.missing_required_fields),
+            },
+            "report": _build_selection_failure_report(
+                hypothesis,
+                selection,
+                extra_unavailable=availability.not_implemented,
+            ),
+        }
+    df = availability.df
+    factor_cols = list(availability.available_factors)
     factor_directions = {factor["name"]: factor["direction"] for factor in factors if factor["name"] in factor_cols}
 
     target_col = target_return_column(selection.target)
@@ -298,7 +321,7 @@ def _with_selection_payload(intent, selection) -> dict[str, Any]:
     return payload
 
 
-def _build_selection_failure_report(hypothesis, selection) -> str:
+def _build_selection_failure_report(hypothesis, selection, extra_unavailable: Optional[list[str]] = None) -> str:
     intent = _intent_to_dict(hypothesis)
     lines = [
         "# AutoETF Research Plan",
@@ -332,6 +355,9 @@ def _build_selection_failure_report(hypothesis, selection) -> str:
         lines.extend(["", "### 不可执行因子"])
         for item in selection.unavailable_factors:
             lines.append(f"- {item.name}: {item.reason}")
+    if extra_unavailable:
+        lines.extend(["", "### 评估器缺失因子"])
+        lines.extend(f"- {name}: not_implemented" for name in extra_unavailable)
     lines.extend(
         [
             "",

@@ -90,10 +90,15 @@ def resolve_factor_intent(user_idea: str) -> FactorIntent:
 
     # INTENT_EXPRESSION_ALIASES maps KB intent names (e.g. "rsi_indicator")
     # onto actual factor names in the factor library (e.g. "rsi_14d"). Keep
-    # this table tiny on purpose: today it only maps RSI, so that expanding
-    # the bridge is an explicit, audited decision per factor.
+    # this table tiny on purpose: today it only maps RSI / BBI, so that
+    # expanding the bridge is an explicit, audited decision per factor.
+    # Generalized "MA" is intentionally NOT mapped — it would silently
+    # route every MA / 均线 / MA向上 query to a single-factor ma_gap_20d
+    # study, which is a false precision. Specific phrases like
+    # "MA20偏离" / "20日均线偏离" are routed via FACTOR_TERM_MAP instead.
     intent_expression_aliases = {
         "rsi_indicator": "rsi_14d",
+        "bbi_indicator": "bbi_indicator",
     }
     for expr in matched_expressions:
         if expr.get("expression_type") == "target_expression":
@@ -154,6 +159,26 @@ def resolve_factor_intent(user_idea: str) -> FactorIntent:
 
     factor_plan = [factor_index[name] for name in factor_names if name in factor_index]
     expression_match = kb_result.get("best_match") or None
+
+    # Narrow cleanup for the MA20-specific deviation phrases: when the
+    # user says "MA20偏离" / "20日均线偏离" / etc., the KB's generic
+    # `native_ma` entry still surfaces a 'MA' token and tags it as
+    # recognized_not_implemented. That false-positive must NOT block the
+    # ma_gap_20d factor path. The carve-out is intentionally narrow:
+    # only strips 'MA' (and only when ma_gap_20d is already chosen) for
+    # queries that contain one of the listed ma_gap_20d-specific phrases.
+    # Generalized 'MA' / '乖离率' / 'BIAS' queries are unaffected.
+    _MA20_DEVIATION_PHRASES = (
+        "MA20偏离",
+        "20日均线偏离",
+        "价格偏离MA20",
+        "收盘价偏离20日均线",
+        "MA20乖离",
+    )
+    if "ma_gap_20d" in factor_names and any(phrase in text for phrase in _MA20_DEVIATION_PHRASES):
+        recognized_not_implemented_terms = [
+            term for term in recognized_not_implemented_terms if term != "MA"
+        ]
 
     return FactorIntent(
         raw_query=text,

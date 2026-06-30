@@ -64,8 +64,16 @@ FACTOR_TERM_MAP: dict[str, list[str]] = {
     "低波动": ["volatility_20d"],
     "成交额放大": ["amount_ratio_20d"],
     "成交量放大": ["volume_ratio_20d"],
+    "5日成交量放大": ["volume_ratio_5d"],
+    "5日量比": ["volume_ratio_5d"],
+    "成交量比5日均值": ["volume_ratio_5d"],
     "趋势走强": ["trend_strength"],
     "站上20日线": ["ma_gap_20d"],
+    "MA20偏离": ["ma_gap_20d"],
+    "20日均线偏离": ["ma_gap_20d"],
+    "价格偏离MA20": ["ma_gap_20d"],
+    "收盘价偏离20日均线": ["ma_gap_20d"],
+    "MA20乖离": ["ma_gap_20d"],
     "突破前高": ["breakout_60d"],
     "缩量上涨": ["reversal_5d", "amount_ratio_20d"],
     "放量突破": ["breakout_60d", "volume_breakout_20d"],
@@ -792,18 +800,18 @@ EXPRESSION_KB.extend(
             meaning="多空指标，通常由多周期均线组合得到，用于观察趋势方向。",
             synonyms=["bbi", "多空指标", "多空均线"],
             required_columns=["close"],
-            derived_columns=["bbi"],
+            derived_columns=["bbi_indicator"],
             formula="BBI(close, 3, 6, 12, 24)",
-            calculation_hint="当前知识库能识别 BBI，但执行层尚未接入统一计算入口。",
+            calculation_hint="BBI 已在本地因子计算器中实现（pandas rolling 3/6/12/24 求均值后取平均）。",
             data_dependency="ohlcv",
             can_be_condition=True,
             can_be_factor=True,
-            route_to=["factor_research", "manual_review"],
+            route_to=["factor_research"],
             route_intent=["factor"],
             example_queries=["BBI", "多空指标", "BBI走强"],
             knowledge_status="known",
-            implementation_status="not_implemented",
-            implementation_key="bbi",
+            implementation_status="implemented",
+            implementation_key="bbi_indicator",
             selection_group="trend",
             selection_priority=80,
         ),
@@ -1870,10 +1878,30 @@ EXPRESSION_KB.extend(
 
 def match_factor_terms(query: str) -> list[str]:
     text = _normalize_text(query)
+    # Longest-term-first matching: if the query contains a more specific
+    # term (e.g. "5日成交量放大"), we drop shorter overlapping matches
+    # (e.g. "成交量放大") so the more specific factor wins. Without this
+    # `5日成交量放大` would also surface `volume_ratio_20d`.
+    normalized_terms = sorted(
+        ((_normalize_text(term), factor_names) for term, factor_names in FACTOR_TERM_MAP.items()),
+        key=lambda kv: -len(kv[0]),
+    )
     matched: list[str] = []
-    for term, factor_names in FACTOR_TERM_MAP.items():
-        if _normalize_text(term) in text:
-            matched.extend(factor_names)
+    seen_terms: list[str] = []
+    for normalized_term, factor_names in normalized_terms:
+        if not normalized_term or normalized_term not in text:
+            continue
+        # Skip if any already-kept term is a strict superstring of this one
+        # within the same query — i.e. the longer term has already covered
+        # this shorter term. Conversely, drop any already-kept shorter
+        # terms that are substrings of this new one.
+        if any(normalized_term in kept for kept in seen_terms):
+            continue
+        seen_terms = [
+            kept for kept in seen_terms if kept not in normalized_term
+        ]
+        seen_terms.append(normalized_term)
+        matched.extend(factor_names)
     return list(dict.fromkeys(matched))
 
 

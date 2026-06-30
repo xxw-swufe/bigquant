@@ -132,19 +132,27 @@ def test_relative_strength_missing_benchmark_prompts_user(monkeypatch):
 
 
 def test_add_bbi_blocks_pipeline_and_preserves_plan(monkeypatch):
+    """BBI is now an implemented factor (BBI(3,6,12,24) on close), so adding it
+    to a plan must route through the factor pipeline rather than block with
+    `recognized_not_implemented`. KDJ remains unimplemented and that contract
+    is covered by `test_add_kdj_blocks_pipeline_and_preserves_plan` below.
+    """
     called = {"value": False}
 
     def fake_call_agent_tool(*args, **kwargs):
         called["value"] = True
-        raise AssertionError("pipeline should not run")
+        return {
+            "report": "# stub\n\nBBI processed.",
+            "factor_result": {},
+            "backtest_result": {"performance": {}},
+            "factors": [{"name": "bbi_indicator"}],
+        }
 
     monkeypatch.setattr("src.chat_agent.call_agent_tool", fake_call_agent_tool)
 
     state = _seed_state(["volatility_20d"])
     result = run_research_chat("再加BBI", FakeConfig(), use_llm=False, state=state)
 
-    assert called["value"] is False
-    assert result["tool_name"] == "direct_reply"
-    assert "recognized_not_implemented" in result["reply"]
-    assert "BBI" in result["reply"]
-    assert result["state"]["current_context"]["committed_plan"]["selected_factor_names"] == ["volatility_20d"]
+    # Pipeline must have run because BBI is now implementable.
+    assert called["value"] is True
+    assert result["tool_name"] == "run_factor_research_pipeline"

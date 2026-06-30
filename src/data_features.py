@@ -152,6 +152,14 @@ def add_etf_derived_features(
 
     data["volatility_20d"] = grouped["return_1d"].transform(lambda s: s.rolling(20, min_periods=20).std())
     data["volatility_60d"] = grouped["return_1d"].transform(lambda s: s.rolling(60, min_periods=60).std())
+
+    # BBI (Bull-Bear Index) = average of MA(3) + MA(6) + MA(12) + MA(24)
+    bbi_ma3 = grouped["close"].transform(lambda s: s.rolling(3, min_periods=3).mean())
+    bbi_ma6 = grouped["close"].transform(lambda s: s.rolling(6, min_periods=6).mean())
+    bbi_ma12 = grouped["close"].transform(lambda s: s.rolling(12, min_periods=12).mean())
+    bbi_ma24 = grouped["close"].transform(lambda s: s.rolling(24, min_periods=24).mean())
+    data["bbi_indicator"] = (bbi_ma3 + bbi_ma6 + bbi_ma12 + bbi_ma24) / 4.0
+    data["bbi_gap"] = data["close"] / data["bbi_indicator"] - 1
     data["risk_adjusted_momentum_20d"] = data["momentum_20d"] / (data["volatility_20d"] + 1e-9)
     data["drawdown_20d"] = data["close"] / grouped["close"].transform(lambda s: s.rolling(20, min_periods=20).max()) - 1
     data["drawdown_60d"] = data["close"] / grouped["close"].transform(lambda s: s.rolling(60, min_periods=60).max()) - 1
