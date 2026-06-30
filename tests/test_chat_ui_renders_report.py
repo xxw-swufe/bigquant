@@ -216,6 +216,11 @@ def test_chat_ui_injects_report_html_after_factor_research(monkeypatch, tmp_path
 
     assert rendered_html, "chat UI did not invoke the report renderer"
     rendered = " ".join(rendered_html)
-    assert "<img" in rendered, f"chat UI did not embed <img>: {rendered_html}"
+    assert "<img" not in rendered, f"chat UI should NOT inline images: {rendered_html}"
+    assert "<a href=" not in rendered, (
+        f"chat UI should NOT link PNGs inline: {rendered_html}"
+    )
     assert "<pre" in rendered, f"chat UI did not embed <pre>: {rendered_html}"
-    assert "file://" in rendered, f"chat UI did not embed file:// URIs: {rendered_html}"
+    assert "已生成" in rendered and "张图表" in rendered, (
+        f"chat UI did not announce chart count and outputs dir: {rendered_html}"
+    )
