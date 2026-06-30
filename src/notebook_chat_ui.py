@@ -10,6 +10,7 @@ import traceback
 from typing import Callable, Optional
 
 from src.chat_state import create_chat_state
+from src.notebook_report_render import build_report_html
 
 
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
@@ -104,6 +105,20 @@ def _append_chat_message(output, label: str, text: str, *, color: str = "#111") 
         display(HTML(block))
 
 
+def _render_report_html_into_output(output, html_block: str) -> None:
+    """Render a chunk of HTML into the given ipywidgets ``Output`` widget.
+
+    The renderer is isolated so tests can monkeypatch it without wrestling
+    with the ``IPython.display`` import dance inside ``handle_send``.
+    """
+    if not html_block:
+        return
+    from IPython.display import HTML, display
+
+    with output:
+        display(HTML(html_block))
+
+
 def launch_notebook_chat(
     config,
     *,
@@ -157,6 +172,15 @@ def launch_notebook_chat(
     status_label = widgets.HTML("")
     last_submission = {"text": None, "time": 0.0}
 
+    def _on_input_change(change):
+        # Re-enable the send button whenever the user types new text, so an
+        # accidental second click on the same text doesn't fire a duplicate
+        # submission. The button is auto-disabled again at submit time.
+        if change.get("name") == "value" and change.get("new") != change.get("old"):
+            send_button.disabled = False
+
+    input_box.observe(_on_input_change, names="value")
+
     def handle_send(_=None):
         nonlocal chat_state
         global _SEND_IN_FLIGHT
@@ -166,7 +190,10 @@ def launch_notebook_chat(
         if not user_input:
             return
         now = monotonic()
-        if last_submission["text"] == user_input and (now - last_submission["time"]) < 2.0:
+        # Stronger dedup: same text within 5s (covers double-click / impatient
+        # user re-presses) and busy guard against concurrent calls.
+        if last_submission["text"] == user_input and (now - last_submission["time"]) < 5.0:
+            status_label.value = "<span style='color:#888'>已发送过同样的内容，请修改后再发送</span>"
             return
         if _SEND_IN_FLIGHT or getattr(handle_send, "_busy", False):
             return
@@ -198,6 +225,23 @@ def launch_notebook_chat(
             result = turn["result"]
             chat_state = result["state"]
             _append_chat_message(transcript_output, "回答：", result["reply"], color="#111")
+            # Render the full Markdown report + chart grid inline so the
+            # chat panel no longer hides the actual research outputs.
+            tool_name = result.get("tool_name")
+            if tool_name == "run_factor_research_pipeline":
+                chat_task_type = "factor_research"
+            elif tool_name == "run_condition_research_pipeline":
+                chat_task_type = "condition_research"
+            else:
+                chat_task_type = None
+            tool_result = result.get("tool_result") or {}
+            if chat_task_type and tool_result:
+                html_block = build_report_html(
+                    tool_result,
+                    chat_task_type,
+                    outputs_dir=getattr(config, "outputs_dir", "outputs"),
+                )
+                _render_report_html_into_output(transcript_output, html_block)
             status_label.value = "<span style='color:#188038'>完成</span>"
         except Exception as exc:
             _append_chat_message(transcript_output, "发生错误：", f"{type(exc).__name__}: {exc}", color="#d93025")
